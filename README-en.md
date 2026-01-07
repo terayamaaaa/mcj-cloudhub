@@ -35,7 +35,7 @@ MCJ-CloudHub is designed with the following goals:
     Per-course directories are created with a custom layout and permission settings, enabling safe concurrent access.
 
   - **Auto-generation of config files**  
-    Both jupyterhub\_config.py and nbgrader\_config.py are automatically generated per user at login.
+    Automatically generate nbgrader\_config.py and setup container per user at login.
 
   - **JST support for nbgrader**  
     The system customizes nbgrader to allow instructors to set and view assignment deadlines in Japan Standard Time (JST), eliminating the need to manually specify time zone offsets.
