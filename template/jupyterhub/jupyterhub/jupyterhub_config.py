@@ -9,11 +9,15 @@ import string
 import sys
 import requests
 import yaml
+
 from ldap3 import MODIFY_REPLACE
 
-from lms_web_service import get_course_students_by_lms_api
 from lti import confirm_key_exist, get_lms_lti_token
 from utils import ldapClient
+try:
+    from lms_web_service import get_course_students_by_lms_api
+except Exception:
+    pass
 
 LOG_FORMAT = '[%(levelname)s %(asctime)s %(module)s %(funcName)s:%(lineno)d] %(message)s'
 CONTEXTLEVEL_COURSE = 50
@@ -153,7 +157,9 @@ c.JupyterHub.init_spawners_timeout = 60
 # Shutdown active kernels (notebooks) when user logged out.
 c.JupyterHub.shutdown_on_logout = True
 # Whether to shutdown single-user servers when the Hub shuts down.
-c.JupyterHub.cleanup_servers = True
+# Set False not to interrupt existing server when restart hub, especially in production.
+c.JupyterHub.cleanup_servers = False
+c.JupyterHub.cleanup_proxy = False
 
 # debug-logging for testing
 c.JupyterHub.log_level = logging.DEBUG
@@ -182,6 +188,7 @@ c.Authenticator.refresh_pre_spawn = True
 c.Authenticator.auth_refresh_age = 300
 c.Authenticator.enable_auth_state = True
 c.Authenticator.manage_groups = True
+c.Authenticator.manage_roles = True
 
 # -- configurations for lti1.3 --
 # Define issuer identifier of the LMS platform
@@ -227,16 +234,6 @@ c.JupyterHub.load_roles.append(
             "read:roles",
         ],
         "services": [service_teachertools_name],
-    }
-)
-# Permission for teachers
-c.JupyterHub.load_roles.append(
-    {
-        "name": "teachers",
-        "scopes": [
-            f"access:services!service={service_teachertools_name}"
-        ],
-        "groups": ["teacher"],
     }
 )
 
@@ -420,7 +417,7 @@ def get_random_password(size=12):
     return password
 
 
-def set_permission_recursive(path: str, mode = None,
+def set_permission_recursive(path: str, mode=None,
                              uid: int = -1, gid: int = -1):
 
     for root, dirs, files in os.walk(path):
@@ -456,21 +453,23 @@ def get_user_mounts(course_name: str, role):
         'bind': os.path.join('/etc', 'sudoers'),
         'mode': 'ro',
     }
+    local_lib_dir = os.path.join(SHARE_DIR_ROOT_HOST, course_name,
+                                 'opt', 'local')
     if role == McjRoles.INSTRUCTOR.value:
-        mounts[os.path.join(SHARE_DIR_ROOT_HOST, course_name, 'opt', 'local', 'sbin')] = {
+        mounts[os.path.join(local_lib_dir, 'sbin')] = {
             'bind': os.path.join('/opt', 'local', 'sbin'),
             'mode': 'rw',
         }
-        mounts[os.path.join(SHARE_DIR_ROOT_HOST, course_name, 'opt', 'local', 'bin')] = {
+        mounts[os.path.join(local_lib_dir, 'bin')] = {
             'bind': os.path.join('/opt', 'local', 'bin'),
             'mode': 'rw',
         }
     else:
-        mounts[os.path.join(SHARE_DIR_ROOT_HOST, course_name, 'opt', 'local', 'sbin')] = {
+        mounts[os.path.join(local_lib_dir, 'sbin')] = {
             'bind': os.path.join('/opt', 'local', 'sbin'),
             'mode': 'ro',
         }
-        mounts[os.path.join(SHARE_DIR_ROOT_HOST, course_name, 'opt', 'local', 'bin')] = {
+        mounts[os.path.join(local_lib_dir, 'bin')] = {
             'bind': os.path.join('/opt', 'local', 'bin'),
             'mode': 'ro',
         }
@@ -491,6 +490,8 @@ def confirm_share_dir(role, user_name,
     confirm_dir(share_path, mode=0o0775, uid=root_uid_num,
                 gid=gid_teachers)
 
+    local_lib_dir = os.path.join(SHARE_DIR_ROOT_HOST, course,
+                                 'opt', 'local')
     if role == McjRoles.INSTRUCTOR.value:
 
         confirm_dir(course_share_dir_root, mode=0o0775, uid=root_uid_num,
@@ -499,10 +500,10 @@ def confirm_share_dir(role, user_name,
                     gid=gid_teachers)
         confirm_dir(submit_dir, mode=0o0750, uid=uid_num,
                     gid=root_uid_num)
-        confirm_dir(os.path.join(SHARE_DIR_ROOT_HOST, course, 'opt', 'local', 'bin'),
+        confirm_dir(os.path.join(local_lib_dir, 'bin'),
                     mode=0o0755, uid=uid_num,
                     gid=-1)
-        confirm_dir(os.path.join(SHARE_DIR_ROOT_HOST, course, 'opt', 'local', 'sbin'),
+        confirm_dir(os.path.join(local_lib_dir, 'sbin'),
                     mode=0o0755, uid=uid_num,
                     gid=-1)
 
@@ -719,7 +720,7 @@ def auth_state_hook(spawner, auth_state):
     )
 
     students = list()
-    if get_course_member_method == 'moodle_api':
+    if get_course_member_method == 'lms_api':
         students = get_course_students_by_lms_api(
             lms_api_token,
             auth_state[IMS_LTI13_KEY_MEMBER_CONTEXT]['id'],
@@ -797,9 +798,38 @@ def post_auth_hook(lti_authenticator, handler, authentication):
     course_name = updated_auth_state['auth_state'][IMS_LTI13_KEY_MEMBER_CONTEXT]['label']
     updated_auth_state['name'] = lms_user_name
     updated_auth_state['groups'] = [course_name]
+
+    if 'roles' not in updated_auth_state:
+        updated_auth_state['roles'] = list()
+
+    # デフォルトのuserは使えない？
+    updated_auth_state['roles'].append({'name': 'user'})
+
+    role_user_common = {
+        'name': 'self',
+    #    'scopes': ['users!user=self']
+    }
+    updated_auth_state['roles'].append(role_user_common)
+
     is_t = McjRoles.is_instructor(authentication['auth_state'][IMS_LTI13_KEY_MEMBER_ROLES])
     if is_t:
         updated_auth_state['groups'].append('teacher')
+
+        role_course_teacher = {
+            'name': f'instructor-{course_name}',
+            'scopes': [
+                'admin-ui',
+                f'list:users!group={course_name}',
+                f'admin:servers!group={course_name}',
+                f"access:servers!group={course_name}",
+            ]}
+        role_instructor_common = {
+            'name': 'instructor',
+            'scopes': ['access:services',
+                       f"access:services!service={service_teachertools_name}"]
+        }
+        updated_auth_state['roles'].append(role_instructor_common)
+        updated_auth_state['roles'].append(role_course_teacher)
 
     return updated_auth_state
 
