@@ -16,8 +16,10 @@ from lti import confirm_key_exist, get_lms_lti_token
 from utils import ldapClient
 try:
     from lms_web_service import get_course_students_by_lms_api
-except Exception:
-    pass
+except Exception as _e:
+    logging.getLogger(__name__).debug(
+        'Optional import lms_web_service failed: %s', _e)
+    get_course_students_by_lms_api = None
 
 LOG_FORMAT = '[%(levelname)s %(asctime)s %(module)s %(funcName)s:%(lineno)d] %(message)s'
 CONTEXTLEVEL_COURSE = 50
@@ -35,10 +37,10 @@ IMS_LTI13_KEY_NRPS = f'https://{IMS_LTI13_FQDN}/spec/lti-nrps/claim/namesroleser
 lti_custom_env_prefix = "env_"
 lti_custom_container_image_name = "container_image_name"
 
-DEFUALT_IDLE_TIMEOUT = 1800
-DEFUALT_CULL_EVERY = 60
-DEFUALT_SERVER_MAX_AGE = 0
-DEFUALT_COOKIE_MAX_AGE_DAYS = 0.25
+DEFAULT_IDLE_TIMEOUT = 1800
+DEFAULT_CULL_EVERY = 60
+DEFAULT_SERVER_MAX_AGE = 0
+DEFAULT_COOKIE_MAX_AGE_DAYS = 0.25
 
 HOME_DIR_ROOT = '/home'
 SHARE_DIR_ROOT = '/jupytershare'
@@ -62,7 +64,7 @@ gid_students = int(os.getenv('STUDENT_GID', 601))
 ldap_password = os.environ['LDAP_PASSWORD']
 ldap_server = os.getenv('LDAP_SERVER', 'ldap:1389')
 ldap_base_dn = 'ou=People,dc=jupyterhub,dc=server,dc=sample,dc=jp'
-ldap_manager_dn = f'cn={os.getenv("LDAP_ADMIN", "Manager")},'\
+ldap_manager_dn = f'cn={os.getenv("LDAP_ADMIN", "Manager")},' \
                     'dc=jupyterhub,dc=server,dc=sample,dc=jp'
 
 database_dbhost = os.getenv('DB_HOST', 'mariadb')
@@ -95,22 +97,26 @@ c = get_config() # type: ignore # noqa
 c.Authenticator.allow_all = True
 c.Authenticator.manage_roles = True
 
+# Enable subdomains and allow iframe for nbgrader
+# Ref: https://nbgrader.readthedocs.io/en/stable/configuration/jupyterhub_config.html#enabling-jupyterhub-subdomains
+c.JupyterHub.enable_subdomains = True
+
 # cookie max-age (days) is 6 hours
 c.JupyterHub.cookie_max_age_days = config.get(
-    'cookie_max_age_days', DEFUALT_COOKIE_MAX_AGE_DAYS)
+    'cookie_max_age_days', DEFAULT_COOKIE_MAX_AGE_DAYS)
 c.JupyterHub.cookie_secret_file = '/srv/jupyterhub/jupyterhub_cookie_secret'
 
 if config.get('cull_server') is not None:
     cull_server_idle_timeout = config['cull_server'].get(
-        'cull_server_idle_timeout', DEFUALT_IDLE_TIMEOUT)
+        'cull_server_idle_timeout', DEFAULT_IDLE_TIMEOUT)
     cull_server_every = config['cull_server'].get(
-        'cull_server_every', DEFUALT_CULL_EVERY)
+        'cull_server_every', DEFAULT_CULL_EVERY)
     cull_server_max_age = config['cull_server'].get(
-        'cull_server_max_age', DEFUALT_SERVER_MAX_AGE)
+        'cull_server_max_age', DEFAULT_SERVER_MAX_AGE)
 else:
-    cull_server_idle_timeout = DEFUALT_IDLE_TIMEOUT
-    cull_server_every = DEFUALT_CULL_EVERY
-    cull_server_max_age = DEFUALT_SERVER_MAX_AGE
+    cull_server_idle_timeout = DEFAULT_IDLE_TIMEOUT
+    cull_server_every = DEFAULT_CULL_EVERY
+    cull_server_max_age = DEFAULT_SERVER_MAX_AGE
 c.JupyterHub.load_roles = []
 
 if cull_server_idle_timeout > 0:
@@ -140,6 +146,10 @@ if cull_server_idle_timeout > 0:
     ]
 
 if 'JUPYTERHUB_CRYPT_KEY' not in os.environ:
+    logger.warning(
+        "Need JUPYTERHUB_CRYPT_KEY env for persistent auth_state.\n"
+        "    export JUPYTERHUB_CRYPT_KEY=$(openssl rand -hex 32)"
+    )
     c.CryptKeeper.keys = [os.urandom(32)]
 
 # The proxy is in another container
@@ -295,50 +305,29 @@ class McjRoles(Enum):
         return [d.value for d in cls]
 
     @classmethod
-    def get_user_role(cls, lti_roles):
-        """role判定
-
-        Instructor&Learner -> Learner
-        Learner -> Learner
-        Instructor -> Instructor
-        """
-
+    def _parse_roles(cls, lti_roles):
         is_instructor = False
         is_learner = False
         for rolename in lti_roles:
             param_type, role = rolename.split('#')
-            if not param_type == IMS_LTI13_KEY_MEMBERSHIP:
+            if param_type != IMS_LTI13_KEY_MEMBERSHIP:
                 continue
             if role == cls.INSTRUCTOR.value:
                 is_instructor = True
             elif role == cls.LEARNER.value:
                 is_learner = True
+        return is_instructor, is_learner
 
+    @classmethod
+    def get_user_role(cls, lti_roles):
+        is_instructor, is_learner = cls._parse_roles(lti_roles)
         if not is_learner and is_instructor:
             return cls.INSTRUCTOR.value
-        else:
-            return cls.LEARNER.value
+        return cls.LEARNER.value
 
     @classmethod
     def is_instructor(cls, lti_roles):
-        """role判定
-
-        Instructor&Learner -> Learner
-        Learner -> Learner
-        Instructor -> Instructor
-        """
-
-        is_instructor = False
-        is_learner = False
-        for rolename in lti_roles:
-            param_type, role = rolename.split('#')
-            if not param_type == IMS_LTI13_KEY_MEMBERSHIP:
-                continue
-            if role == cls.INSTRUCTOR.value:
-                is_instructor = True
-            elif role == cls.LEARNER.value:
-                is_learner = True
-
+        is_instructor, is_learner = cls._parse_roles(lti_roles)
         return not is_learner and is_instructor
 
 
@@ -390,14 +379,13 @@ class FailedAuthStateHookException(McjException):
         )
 
 
-def confirm_dir(path, mode=0o700, uid=-1, gid=-1):
-
+def confirm_dir(path: str, mode: int = 0o700, uid: int = -1, gid: int = -1) -> None:
     os.makedirs(path, exist_ok=True)
     os.chmod(path, mode=mode)
     os.chown(path, uid, gid)
 
 
-def change_owner(homePath, uid, gid):
+def change_owner(homePath: str, uid: int, gid: int) -> None:
     for root, dirs, files in os.walk(homePath):
         for d in dirs:
             os.chown(os.path.join(root, d), uid, gid)
@@ -406,7 +394,7 @@ def change_owner(homePath, uid, gid):
     os.chown(homePath, uid, gid)
 
 
-def get_random_password(size=12):
+def get_random_password(size: int = 12) -> str:
     alphabet = string.ascii_letters + string.digits
     while True:
         password = ''.join(secrets.choice(alphabet) for i in range(size))
@@ -417,9 +405,8 @@ def get_random_password(size=12):
     return password
 
 
-def set_permission_recursive(path: str, mode=None,
-                             uid: int = -1, gid: int = -1):
-
+def set_permission_recursive(path: str, mode: int | None = None,
+                             uid: int = -1, gid: int = -1) -> None:
     for root, dirs, files in os.walk(path):
         for d in dirs:
             p = os.path.join(root, d)
@@ -434,7 +421,7 @@ def set_permission_recursive(path: str, mode=None,
             os.chown(p, uid, gid)
 
 
-def get_user_mounts(course_name: str, role):
+def get_user_mounts(course_name: str, role: str) -> dict:
 
     mounts = dict()
     mounts[os.path.join(HOME_DIR_ROOT_HOST, '{username}')] = {
@@ -720,7 +707,7 @@ def auth_state_hook(spawner, auth_state):
     )
 
     students = list()
-    if get_course_member_method == 'lms_api':
+    if get_course_member_method == 'lms_api' and get_course_students_by_lms_api is not None:
         students = get_course_students_by_lms_api(
             lms_api_token,
             auth_state[IMS_LTI13_KEY_MEMBER_CONTEXT]['id'],
