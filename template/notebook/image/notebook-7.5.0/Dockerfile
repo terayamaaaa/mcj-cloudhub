@@ -1,4 +1,4 @@
-FROM quay.io/jupyter/scipy-notebook:notebook-7.5.0
+FROM quay.io/jupyter/base-notebook:notebook-7.5.0
 
 LABEL Description="Single-user notebook server container image for MCJ-CloudHub"
 
@@ -134,3 +134,5 @@ COPY start-notebook-hook-mcj.sh /usr/local/bin/start-notebook.d/start-notebook-h
 
 # Executed after standard setup, before right before the Server launches
 COPY start-singleuser-mcj.sh /usr/local/bin/before-notebook.d/start-singleuser-mcj.sh
+
+COPY --chown=root:root sudoers /etc/sudoers

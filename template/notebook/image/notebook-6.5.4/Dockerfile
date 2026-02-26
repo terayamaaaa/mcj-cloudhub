@@ -139,4 +139,6 @@ COPY start-notebook-hook-mcj.sh /usr/local/bin/start-notebook.d/start-notebook-h
 # Executed after standard setup, before right before the Server launches
 COPY start-singleuser-mcj.sh /usr/local/bin/before-notebook.d/start-singleuser-mcj.sh
 
+COPY --chown=root:root sudoers /etc/sudoers
+
 HEALTHCHECK NONE

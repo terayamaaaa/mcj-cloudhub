@@ -91,7 +91,8 @@ def create_lti_jwt(tool_url, private_key, token_endpoint, client_id):
         token_value, private_key, algorithm="RS256")
 
 
-def get_lms_lti_token(scopes: str | list, tool_url, private_key, token_endpoint, client_id) -> str:
+def get_lms_lti_token(scopes: str | list, tool_url,
+                      private_key, token_endpoint, client_id) -> str:
 
     # scopeはスペース区切りで指定する
     if str == type(scopes):
