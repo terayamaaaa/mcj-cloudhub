@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import requests
+from urllib.parse import urlsplit, urlunsplit
 
 from jupyterhub.services.auth import HubAuthenticated, HubOAuthenticated
 from jupyterhub.utils import url_path_join
@@ -31,7 +32,6 @@ require_scopes = (
 )
 course_info_key = 'https://purl.imsglobal.org/spec/lti/claim/context'
 lms_token = None
-private_key, _ = confirm_key_exist()
 
 
 DEFAULT_DT_FROM = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -588,23 +588,23 @@ class TeacherToolsUpdateHandler(TeacherToolsOutputHandler):
         super().initialize()
         self.lms_token_endpoint = lms_token_endpoint
         self.lms_client_id = lms_client_id
+        self.private_key, _ = confirm_key_exist(self.settings.get("lti_key_pair_path"))
 
     def get_uid(self, username):
-        ldap_manager_dn = f'cn={os.getenv("LDAP_ADMIN", "Manager")},'\
-                        'dc=jupyterhub,dc=server,dc=sample,dc=jp'
         ldapconn = ldapClient(os.environ['LDAP_SERVER'],
-                              ldap_manager_dn,
+                              os.environ['LDAP_MANAGER_DN'],
                               os.environ['LDAP_PASSWORD'])
         search_result = ldapconn.search_user(username, ['uidNumber'])
         return int(search_result[0].uidNumber.value) if search_result is not None else None
 
-    def _request_lms(self, url, headers, method="GET", params=None, data=None, timeout=10):
+    def _request_lms(self, url, headers, method="GET",
+                     params=None, data=None, timeout=10):
         global lms_token
         if lms_token is None:
             lms_token = get_lms_lti_token(
                                 require_scopes,
                                 os.environ['JUPYTERHUB_BASE_URL'],
-                                private_key,
+                                self.private_key,
                                 self.lms_token_endpoint,
                                 self.lms_client_id)
         _headers = headers.copy()
@@ -621,10 +621,10 @@ class TeacherToolsUpdateHandler(TeacherToolsOutputHandler):
         if HTTPStatus.UNAUTHORIZED == response.status_code:
             # service用tokenが有効期限切れになっている場合再発行
             lms_token = get_lms_lti_token(require_scopes,
-                                            os.environ['JUPYTERHUB_BASE_URL'],
-                                            private_key,
-                                            self.lms_token_endpoint,
-                                            self.lms_client_id)
+                                          os.environ['JUPYTERHUB_BASE_URL'],
+                                          self.private_key,
+                                          self.lms_token_endpoint,
+                                          self.lms_client_id)
             self.log.warning("LMS access token expired and recreated.")
             # 再度リクエスト
             _headers['Authorization'] = f'Bearer {lms_token}'
@@ -648,6 +648,10 @@ class TeacherToolsUpdateHandler(TeacherToolsOutputHandler):
         """
         headers = {'Accept': 'application/vnd.ims.lis.v2.lineitemcontainer+json'}
         response = self._request_lms(url, headers)
+        if HTTPStatus.OK != response.status_code:
+            raise web.HTTPError(
+                response.status_code, f"Lineitem get failed: {response.text}"
+            )
         for lineitem in response.json():
             if lineitem['label'] == assignment:
                 lineitem_id = lineitem['id']
@@ -666,6 +670,23 @@ class TeacherToolsUpdateHandler(TeacherToolsOutputHandler):
         response = self._request_lms(url, headers, method="POST",
                                      data=score.model_dump_json())
         return response
+
+    def get_lms_url_base(self, ags_url: str):
+        parts = urlsplit(ags_url)
+        lms_host = self.settings.get("lms_host")
+        if lms_host is None:
+            ags_url_base = urlunsplit((parts.scheme, parts.netloc, parts.path, '', ''))
+        else:
+            # lms_platform_idとlms-hostでsubdirが異なる場合は、lms-hostのURLを優先する
+            # この場合、 同じホスト上にMoodleとJHが存在し、JH->Moodleのアクセスはdocker network内で行われると判断する
+            subdir = urlsplit(self.settings['lms_platform_id']).path
+            path = parts.path
+            if path.startswith(subdir):
+                path = path.replace(subdir, "", 1)
+            lms_host_splitted = urlsplit(lms_host)
+            ags_url_base = urlunsplit((lms_host_splitted.scheme,
+                                       lms_host_splitted.netloc, path, '', ''))
+        return ags_url_base
 
     @web.authenticated
     async def post(self):
@@ -706,7 +727,6 @@ class TeacherToolsUpdateHandler(TeacherToolsOutputHandler):
             )
 
         ags_url = user_info['auth_state']["https://purl.imsglobal.org/spec/lti-ags/claim/endpoint"]['lineitems']
-        from urllib.parse import urlsplit, urlunsplit
 
         # Check assignment info exists in nbgrader db
         gb_dir = db_path(user['name'], course_id, self.homedir)
@@ -718,10 +738,8 @@ class TeacherToolsUpdateHandler(TeacherToolsOutputHandler):
                     HTTPStatus.NOT_FOUND, f"Not found assignment in db: {assignment_name}"
                 )
 
-        parts = urlsplit(ags_url)
-        ags_url_base = urlunsplit((parts.scheme, parts.netloc, parts.path, '', ''))
-        ags_url_query = parts.query
-
+        ags_url_base = self.get_lms_url_base(ags_url)
+        ags_url_query = urlsplit(ags_url).query
         # Search lineitem(column)
         lineitem_id = self.get_lineitem_id_from_assignment(
             f'{ags_url_base}?{ags_url_query}', assignment.name)
@@ -748,9 +766,8 @@ class TeacherToolsUpdateHandler(TeacherToolsOutputHandler):
             # http://sample.com/mod/lti/services.php/6/lineitems/28/lineitem?type_id=1 などが返る
             lineitem_id = response.json()['id']
 
-        parts = urlsplit(lineitem_id)
-        ags_url_base = urlunsplit((parts.scheme, parts.netloc, parts.path, '', ''))
-        ags_url_query = parts.query
+        ags_url_base = self.get_lms_url_base(lineitem_id)
+        ags_url_query = urlsplit(lineitem_id).query
         grades = get_grades(course_id,
                             assignment.name,
                             user['name'],
@@ -783,6 +800,7 @@ class TeacherToolsUpdateHandler(TeacherToolsOutputHandler):
                 f'{ags_url_base}/scores?{ags_url_query}',
                 score)
             if not (200 <= response.status_code < 300):
+                self.log.error(f"Score register failed. status_code: {response.status_code}, response: {response.text}")
                 raise web.HTTPError(
                     response.status_code, "Score register failed"
                 )
@@ -808,6 +826,10 @@ class TeacherToolsViewHandler(TeacherToolsHandler):
         post_url = url_path_join(self.service_prefix, "api/ags/scores")
 
         course_short_name = self.course_shortname(user, self.homedir)
+        if self.get_user_info(user).get('auth_state') is None:
+            raise web.HTTPError(
+                HTTPStatus.UNAUTHORIZED, "User may be logged out. Login required."
+            )
         course_name = self.get_user_info(user)['auth_state'][course_info_key]['title']
         assignments = get_course_assignments(user['name'],
                                              course_short_name,
