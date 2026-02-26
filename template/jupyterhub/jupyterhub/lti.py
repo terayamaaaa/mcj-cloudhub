@@ -91,7 +91,8 @@ def create_lti_jwt(tool_url, private_key, token_endpoint, client_id):
         token_value, private_key, algorithm="RS256")
 
 
-def get_lms_lti_token(scopes: str | list, tool_url, private_key, token_endpoint, client_id) -> str:
+def get_lms_lti_token(scopes: str | list, tool_url,
+                      private_key, token_endpoint, client_id) -> str:
 
     # scopeはスペース区切りで指定する
     if str == type(scopes):
@@ -126,3 +127,39 @@ def get_lms_lti_token(scopes: str | list, tool_url, private_key, token_endpoint,
         raise Exception("Failed to get nrps token from LMS. Public key in outer tool settings in LMS may be wrong")
 
     return response.json()['access_token']
+
+
+def get_course_students_by_moodle_api(token, courseid, iss):
+
+    url = f'{iss}/webservice/rest/server.php'
+    params = {
+        'wstoken': token,
+        'wsfunction': 'core_enrol_get_enrolled_users',
+        'courseid': courseid,
+        'moodlewsrestformat': 'json',
+    }
+    headers = {
+        "content-type": "application/json"
+    }
+    params = urllib.parse.urlencode(params)
+    response = requests.get(
+        url,
+        headers=headers,
+        params=params,
+    )
+
+    students = list()
+    for member in response.json():
+
+        if not any(role['shortname'] == 'student' for role in member['roles']):
+            continue
+
+        students.append(
+            dict(
+                id=member['username'],
+                first_name=member['firstname'],
+                last_name=member['lastname'],
+                email=member['email'],
+                lms_user_id=member['id']))
+
+    return students

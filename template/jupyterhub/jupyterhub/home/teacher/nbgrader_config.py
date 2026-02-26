@@ -1,4 +1,3 @@
-import getpass
 import os
 
 from nbgrader.api import Gradebook
@@ -10,7 +9,7 @@ c = get_config()  # noqa
 
 NBG_STUDENTS = []
 COURSE_NAME_SHORT = os.environ['MOODLECOURSE']
-NBG_USER_DIR = f'/home/{getpass.getuser()}/nbgrader'
+NBG_USER_DIR = f'{os.environ["HOME"]}/nbgrader'
 GRADEBOOK_DB = f'sqlite:///{NBG_USER_DIR}/{COURSE_NAME_SHORT}/gradebook.db'
 
 gb = Gradebook(GRADEBOOK_DB, COURSE_NAME_SHORT, None)

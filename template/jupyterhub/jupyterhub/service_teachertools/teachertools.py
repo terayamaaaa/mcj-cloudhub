@@ -36,7 +36,11 @@ class TeacherToolsService(Application):
         'port': 'TeacherToolsService.port',
         'lms-token-endpoint': 'TeacherToolsService.lms_token_endpoint',
         'lms-client-id': 'TeacherToolsService.lms_client_id',
+        'lms-platform-id': 'TeacherToolsService.lms_platform_id',
         'homedir': 'TeacherToolsService.homedir',
+        'lti-key-pair-path': 'TeacherToolsService.lti_key_pair_path',
+        'lms-host': 'TeacherToolsService.lms_host',
+        'cookie-secret-file': 'TeacherToolsService.cookie_secret_file',
     }
 
     hub_api_url = Unicode(
@@ -97,7 +101,7 @@ class TeacherToolsService(Application):
     ).tag(config=True)
 
     cookie_secret_file = Unicode(
-        "/srv/jupyterhub/jupyterhub_cookie_secret",
+        "/etc/jupyterhub/secrets/jupyterhub_cookie_secret",
         help="File in which we store the cookie secret.",
     ).tag(config=True)
 
@@ -125,6 +129,18 @@ class TeacherToolsService(Application):
         config=True,
     )
 
+    lms_platform_id = Unicode(
+        "",
+        help=dedent(
+            """
+            LMS platform id.
+            """
+        ).strip(),
+        allow_none=False,
+    ).tag(
+        config=True,
+    )
+
     homedir = Unicode(
         "/home",
         help=dedent(
@@ -137,6 +153,29 @@ class TeacherToolsService(Application):
         config=True,
     )
 
+    lti_key_pair_path = Unicode(
+        "/etc/jupyterhub",
+        help=dedent(
+            """
+            Directory path where key path for lti auth is saved.
+            """
+        ).strip(),
+        allow_none=True,
+    ).tag(
+        config=True,
+    )
+
+    lms_host = Unicode(
+        "",
+        help=dedent(
+            """
+            LMS host name.
+            """
+        ).strip(),
+        allow_none=False,
+    ).tag(
+        config=True,
+    )
     _log_formatter_cls = CoroutineLogFormatter
 
     @default("log_datefmt")
@@ -180,6 +219,9 @@ class TeacherToolsService(Application):
             "xsrf_cookies": True,
             'homedir': self.homedir,
             'hub_api_url': self.hub_api_url,
+            'lti_key_pair_path': self.lti_key_pair_path,
+            'lms_host': self.lms_host,
+            'lms_platform_id': self.lms_platform_id,
         }
 
         if "xsrf_cookie_kwargs" not in self.settings:
