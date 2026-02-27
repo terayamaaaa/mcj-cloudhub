@@ -40,6 +40,7 @@ class TeacherToolsService(Application):
         'homedir': 'TeacherToolsService.homedir',
         'lti-key-pair-path': 'TeacherToolsService.lti_key_pair_path',
         'lms-host': 'TeacherToolsService.lms_host',
+        'cookie-secret-file': 'TeacherToolsService.cookie_secret_file',
     }
 
     hub_api_url = Unicode(
@@ -100,7 +101,7 @@ class TeacherToolsService(Application):
     ).tag(config=True)
 
     cookie_secret_file = Unicode(
-        "/srv/jupyterhub/jupyterhub_cookie_secret",
+        "/etc/jupyterhub/secrets/jupyterhub_cookie_secret",
         help="File in which we store the cookie secret.",
     ).tag(config=True)
 

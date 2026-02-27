@@ -25,11 +25,14 @@ services:
       retries: 3
   jupyterhub:
     build:
-      context: ./jupyterhub/image
+      context: ./jupyterhub
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
-      - ./jupyterhub:/etc/jupyterhub
-      - ${DATA_DIR_ROOT_HOST:-${PWD}/mcj-data}:/jupyterdata
+      - ${DATA_DIR_ROOT_HOST:-${PWD}/mcj-data}:/jupyterdata # Must be created in advance
+      - ./conf.d:/etc/jupyterhub/conf.d # User conf
+      - ./jupyterhub/jupyterhub_config.py:/etc/jupyterhub/jupyterhub_config.py:ro # For develop
+      # - ./test/custom.py:/etc/jupyterhub/custom.py:ro # For test
+      # - ./test/conf.d:/etc/jupyterhub/conf.d:ro # For test
     networks:
       - jupyterhub-network
     environment:
