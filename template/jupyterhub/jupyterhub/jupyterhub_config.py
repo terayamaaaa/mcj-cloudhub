@@ -3,23 +3,16 @@ from enum import Enum
 import logging
 import os
 import pwd
-import secrets
 import shutil
-import string
 import sys
 import requests
 import yaml
 
 from ldap3 import MODIFY_REPLACE
 
-from lti import confirm_key_exist, get_lms_lti_token
-from utils import ldapClient, replace_url
-try:
-    from lms_web_service import get_course_students_by_lms_api
-except Exception as _e:
-    logging.getLogger(__name__).debug(
-        'Optional import lms_web_service failed: %s', _e)
-    get_course_students_by_lms_api = None
+from lti import confirm_key_exist, get_lms_lti_token, get_course_students_by_moodle_api
+from utils import (ldapClient, replace_url, confirm_dir,
+                   get_random_password, set_permission_recursive)
 
 LOG_FORMAT = '[%(levelname)s %(asctime)s %(module)s %(funcName)s:%(lineno)d] %(message)s'
 CONTEXTLEVEL_COURSE = 50
@@ -42,9 +35,6 @@ DEFAULT_CULL_EVERY = 60
 DEFAULT_SERVER_MAX_AGE = 0
 DEFAULT_COOKIE_MAX_AGE_DAYS = 0.25
 
-# HOME_DIR_ROOT = '/home'
-# SHARE_DIR_ROOT = '/jupytershare'
-
 # -- logger setting --
 logger = logging.getLogger()
 handler = logging.StreamHandler(sys.stdout)
@@ -53,6 +43,14 @@ log_formatter = logging.Formatter(LOG_FORMAT)
 handler.setFormatter(log_formatter)
 logger.addHandler(handler)
 logger.setLevel(logging.DEBUG)
+
+try:
+    # 継承先イメージで配置される予定のクラスをインポート試行
+    from custom import get_course_students as get_course_students_custom
+    logger.info('[Config] Custom function for getting course students is set.')
+except Exception:
+    # なければベースを使う
+    get_course_students_custom = None
 
 jupyterhub_fqdn = os.environ['JUPYTERHUB_FQDN']
 jupyterhub_admin_users = os.getenv('JUPYTERHUB_ADMIN_USERS')
@@ -78,16 +76,20 @@ lms_api_token = os.getenv('LMS_API_TOKEN')
 # Paths on host(Must be known to jupyterhub for singleuser container mount settings)
 JUPYTERHUB_DIR_HOST = os.getenv('JUPYTERHUB_DIR_HOST',
                                 os.path.join('/srv', 'jupyterhub', 'jupyterhub', 'jupyterhub'))
-MCJ_DATA_HOST = os.getenv('MCJ_DATA_HOST', os.path.join(JUPYTERHUB_DIR_HOST, 'mcj-data'))
+MCJ_DATA_HOST = os.getenv('MCJ_DATA_HOST',
+                          os.path.join(JUPYTERHUB_DIR_HOST, 'mcj-data'))
 HOME_DIR_ROOT_HOST = os.path.join(MCJ_DATA_HOST, 'jupyter')
 SHARE_DIR_ROOT_HOST = os.path.join(MCJ_DATA_HOST, 'jupytershare')
 
 # Paths in jupyterhub container
 JUPYTERHUB_DIR = '/etc/jupyterhub'
+USER_CONF_DIR = os.path.join(JUPYTERHUB_DIR, 'conf.d')
 # SHARE_DIR_ROOT_JUPYTERHUB = os.getenv('SHARE_DIR_ROOT', '/exchange')
 SHARE_DIR_ROOT_JUPYTERHUB = '/jupyterdata'
 HOME_DIR_ROOT = os.path.join(SHARE_DIR_ROOT_JUPYTERHUB, 'jupyter')
 SHARE_DIR_ROOT = os.path.join(SHARE_DIR_ROOT_JUPYTERHUB, 'jupytershare') # or exchange/jupytershare?
+SECRET_DIR = os.path.join(SHARE_DIR_ROOT_JUPYTERHUB, 'secrets')
+os.makedirs(SECRET_DIR, exist_ok=True)
 
 # Paths in singleuser container
 HOME_DIR_ROOT_SINGLEUSER = os.path.join('/home')
@@ -104,14 +106,18 @@ email_domain = os.getenv('EMAIL_DOMAIN', 'example.com')
 try:
     root_obj = pwd.getpwnam("root")
 except KeyError as e:
-    logger.error("Could not find root in passwd.")
+    logger.error("[Config] Could not find root in passwd.")
     raise e
 
 root_uid_num = int(root_obj[2])
 # root_gid_num = int(root_obj[3])
 
-with open(os.path.join(JUPYTERHUB_DIR, 'jupyterhub_params.yaml'), 'r',
-          encoding="utf-8") as yml:
+resource_yml_path = os.path.join(JUPYTERHUB_DIR, 'jupyterhub_params.yaml')
+if os.path.isfile(os.path.join(USER_CONF_DIR, 'jupyterhub_params.yaml')):
+    resource_yml_path = os.path.join(USER_CONF_DIR, 'jupyterhub_params.yaml')
+    logger.info('[Config] Custom jupyterhub_params.yaml is set.')
+
+with open(resource_yml_path, 'r', encoding="utf-8") as yml:
     config = yaml.safe_load(yml)
 
 c = get_config() # type: ignore # noqa
@@ -126,7 +132,8 @@ c.JupyterHub.enable_subdomains = True
 # cookie max-age (days) is 6 hours
 c.JupyterHub.cookie_max_age_days = config.get(
     'cookie_max_age_days', DEFAULT_COOKIE_MAX_AGE_DAYS)
-c.JupyterHub.cookie_secret_file = '/srv/jupyterhub/jupyterhub_cookie_secret'
+c.JupyterHub.cookie_secret_file = os.path.join(SECRET_DIR,
+                                               'jupyterhub_cookie_secret')
 
 if config.get('cull_server') is not None:
     cull_server_idle_timeout = config['cull_server'].get(
@@ -232,14 +239,12 @@ c.LTI13Authenticator.jwks_endpoint = f'{LMS_URL}/mod/lti/certs.php' if LMS_URL \
                                         else f'{c.LTI13Authenticator.issuer}/mod/lti/certs.php'
 token_endpoint = f'{LMS_URL}/mod/lti/token.php' if LMS_URL \
                     else f'{c.LTI13Authenticator.issuer}/mod/lti/token.php'
-lti_key_pair_path = os.path.join(SHARE_DIR_ROOT_JUPYTERHUB, 'secrets')
-os.makedirs(lti_key_pair_path, exist_ok=True)
-private_key, public_key = confirm_key_exist(path=lti_key_pair_path)
+
+private_key, public_key = confirm_key_exist(path=SECRET_DIR)
 
 service_teachertools_name = "teachertools"
 service_teachertools_port = 8088
 
-# TODO: Support non lti auth
 c.JupyterHub.services.append(
     {
         'name': service_teachertools_name,
@@ -260,9 +265,11 @@ c.JupyterHub.services.append(
             '--homedir',
             HOME_DIR_ROOT,
             '--lti-key-pair-path',
-            lti_key_pair_path,
+            SECRET_DIR,
             '--lms-host',
             LMS_URL,
+            '--cookie-secret-file',
+            c.JupyterHub.cookie_secret_file,
         ],
         'environment': {'LDAP_PASSWORD': os.environ['LDAP_ADMIN_PASSWORD'],
                         'LDAP_SERVER': ldap_server,
@@ -377,7 +384,7 @@ role_config = {
         'mem_guarantee': config['resource']['groups']['teacher']['mem_guarantee'],
         'gid_num': gid_teachers,
         'login_shell': '/bin/bash',
-        'template_dir_name': 'teachers',
+        'template_dir_name': 'teacher',
     },
     McjRoles.LEARNER.value: {
         'cpu_limit': config['resource']['groups']['student']['cpu_limit'],
@@ -386,7 +393,7 @@ role_config = {
         'mem_guarantee': config['resource']['groups']['student']['mem_guarantee'],
         'gid_num': gid_students,
         'login_shell': '/sbin/nologin',
-        'template_dir_name': 'students',
+        'template_dir_name': 'student',
     },
 }
 
@@ -415,48 +422,6 @@ class FailedAuthStateHookException(McjException):
         return (
             'ERROR: Failed to auth_state_hook. See the log to get detail.'
         )
-
-
-def confirm_dir(path: str, mode: int = 0o700, uid: int = -1, gid: int = -1) -> None:
-    os.makedirs(path, exist_ok=True)
-    os.chmod(path, mode=mode)
-    os.chown(path, uid, gid)
-
-
-def change_owner(homePath: str, uid: int, gid: int) -> None:
-    for root, dirs, files in os.walk(homePath):
-        for d in dirs:
-            os.chown(os.path.join(root, d), uid, gid)
-        for f in files:
-            os.chown(os.path.join(root, f), uid, gid)
-    os.chown(homePath, uid, gid)
-
-
-def get_random_password(size: int = 12) -> str:
-    alphabet = string.ascii_letters + string.digits
-    while True:
-        password = ''.join(secrets.choice(alphabet) for i in range(size))
-        if (any(c.islower() for c in password)
-                and any(c.isupper() for c in password)
-                and sum(c.isdigit() for c in password) >= 3):
-            break
-    return password
-
-
-def set_permission_recursive(path: str, mode: int | None = None,
-                             uid: int = -1, gid: int = -1) -> None:
-    for root, dirs, files in os.walk(path):
-        for d in dirs:
-            p = os.path.join(root, d)
-            if mode is not None:
-                os.chmod(p, mode)
-            os.chown(p, uid, gid)
-
-        for f in files:
-            p = os.path.join(root, f)
-            if mode is not None:
-                os.chmod(p, mode)
-            os.chown(p, uid, gid)
 
 
 def get_user_mounts(course_name: str, role: str) -> dict:
@@ -598,7 +563,7 @@ def confirm_dirs(course_name,
 
     user_home = os.path.join(HOME_DIR_ROOT, user_name)
     home_dir_base = os.path.join(JUPYTERHUB_DIR,
-                                 'directory_base',
+                                 'home',
                                  role_config[role]['template_dir_name'])
 
     # ホームディレクトリ作成
@@ -608,11 +573,14 @@ def confirm_dirs(course_name,
 
     if role == McjRoles.INSTRUCTOR.value:
 
+        # images: 存在しなければ作成
         images_dir = os.path.join(user_home, 'images')
         shutil.copytree(os.path.join(home_dir_base, 'images'),
                         images_dir, dirs_exist_ok=True)
+        # README.md: 存在しなければ作成
         shutil.copy(os.path.join(home_dir_base, 'README.md'),
                     user_home)
+        # teacher_tools: 存在しなければ作成
         tools_dir = os.path.join(user_home, 'teacher_tools')
         if not os.path.isdir(tools_dir):
             shutil.copytree(os.path.join(home_dir_base, 'teacher_tools'),
@@ -741,11 +709,15 @@ def auth_state_hook(spawner, auth_state):
     )
 
     students = list()
-    if get_course_member_method == 'lms_api' and get_course_students_by_lms_api is not None:
-        students = get_course_students_by_lms_api(
+    if get_course_member_method == 'moodle_api':
+        students = get_course_students_by_moodle_api(
             lms_api_token,
             auth_state[IMS_LTI13_KEY_MEMBER_CONTEXT]['id'],
             c.LTI13Authenticator.issuer)
+    elif get_course_students_custom is not None:
+        students = get_course_students_custom(
+            auth_state,
+            lms_course_shortname)
     else:
         context_memberships_url = auth_state[IMS_LTI13_KEY_NRPS]['context_memberships_url']
         if LMS_URL:
@@ -754,7 +726,6 @@ def auth_state_hook(spawner, auth_state):
         students = get_course_students_by_nrps(
             context_memberships_url,
             default_key=c.LTI13Authenticator.username_key)
-
     confirm_dirs(
         lms_course_shortname, lms_role, lms_username,
         uid_num, gid_num,

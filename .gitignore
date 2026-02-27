@@ -14,3 +14,4 @@ mcj-data
 .env
 *.pem
 *Zone.Identifier
+jupyterhub/conf.d
