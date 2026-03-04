@@ -1,0 +1,15 @@
+docs_dir: docmerged
+locale: ja
+nav:
+- MCJ-CloudHub: MCJ-CloudHub.md
+- 利用の流れ: usage.md
+- 環境構築: 環境構築.md
+- 教員用マニュアル: 教員用マニュアル.md
+- 実行ログ分析ツール: 実行ログ分析ツール.md
+- 動作確認ツール: 動作確認ツール.md
+- ユーザ用コンテナイメージ: ユーザ用コンテナイメージ.md
+- 開発者向け: developers.md
+repo_url: https://github.com/nii-gakunin-cloud/mcj-cloudhub
+site_name: MCJ-Cloudhub
+theme:
+  name: material

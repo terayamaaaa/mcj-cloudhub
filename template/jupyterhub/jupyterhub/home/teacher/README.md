@@ -1,7 +1,5 @@
-# MCJ-CloudHub利用手引（教員向け）
+# 教員用マニュアル
 
-
-## 目次
 
 [概要](#概要)  
 [nbgrader](#nbgrader)  
