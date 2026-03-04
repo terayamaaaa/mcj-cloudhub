@@ -12,7 +12,9 @@
 
   一通り演習が終了した段階で、どのセルにどのくらいの時間をかけて取り組んでいたのかなどを分析する
 
-また、収集したログをElasticSearchに送信するサンプルノートブックを用意しています（`elasticsearch.ipynb`）。
+- Elasticsearchへの送信（`elasticsearch.ipynb`）    
+
+  収集したログを別途構築済みのElasticsearchに送信するノートブック
 
 ## 利用手順
 

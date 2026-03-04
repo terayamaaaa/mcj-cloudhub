@@ -15,3 +15,4 @@ mcj-data
 *.pem
 *Zone.Identifier
 jupyterhub/conf.d
+docmerged
