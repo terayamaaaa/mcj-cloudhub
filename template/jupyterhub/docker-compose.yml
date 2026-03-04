@@ -90,7 +90,7 @@ services:
     ports:
       - 443:443
     volumes:
-      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/templates/${NGINX_CONF_TEMPLATE:-default}:/etc/nginx/templates:ro
       - ./nginx/certs:/etc/nginx/certs:ro
     networks:
       - jupyterhub-network

@@ -60,7 +60,7 @@ services:
       LMS_CLIENT_ID: {{lms_cliend_id}}
       LTI_USERNAME_KEY: "sub"
       DEFAULT_URL: {{default_url}}
-      ENABLE_CUSTOM_SETUP: {{default_url | default('')}}
+      ENABLE_CUSTOM_SETUP: "{{enable_custom_setup | default('')}}"
       DATA_ROOT: /jupyterdata
 {% if lms_url is defined %}
       LMS_URL: {{ lms_url }}
@@ -96,7 +96,7 @@ services:
     ports:
       - 443:443
     volumes:
-      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/templates/default:/etc/nginx/templates:ro
       - ./nginx/certs:/etc/nginx/certs:ro
     networks:
       - {{swarm_network}}
