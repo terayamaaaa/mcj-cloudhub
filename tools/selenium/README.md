@@ -1,4 +1,4 @@
-# Selenium
+# 動作確認ツール
 
 Seleniumを用いてユーザのログインからsingle-user notebook serverコンテナの起動までを検証するためのツールです。
 

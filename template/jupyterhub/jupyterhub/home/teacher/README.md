@@ -1,7 +1,5 @@
-# MCJ-CloudHub利用手引（教員向け）
+# 課題ファイル管理（nbgrader）
 
-
-## 目次
 
 [概要](#概要)  
 [nbgrader](#nbgrader)  

@@ -71,30 +71,18 @@ services:
       db:
         condition: service_healthy
         restart: true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/hub/health"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 10
   jupyterhub-proxy:
     image: jupyterhub/configurable-http-proxy
     networks:
       - jupyterhub-network
     environment:
       CONFIGPROXY_AUTH_TOKEN: ${CONFIGPROXY_AUTH_TOKEN?Variable not set}
-      JUPYTERHUB_FQDN: ${JUPYTERHUB_FQDN:-localhost}
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-      placement:
-        constraints:
-          - node.role == manager
-  proxy:
-    image: nginx
-    ports:
-      - 443:443
-    volumes:
-      - ./nginx/templates/${NGINX_CONF_TEMPLATE:-default}:/etc/nginx/templates:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
-    networks:
-      - jupyterhub-network
-    environment:
       JUPYTERHUB_FQDN: ${JUPYTERHUB_FQDN:-localhost}
     deploy:
       replicas: 1
@@ -145,23 +133,52 @@ services:
       - MOODLE_EMAIL=${MOODLE_EMAIL:-admin@example.com}
       - MOODLE_PASSWORD=${MOODLE_PASSWORD?Variable not set}
       - MOODLE_LANG=ja
-      - BITNAMI_DEBUG=true # 詳細ログ出力
+      # - BITNAMI_DEBUG=true # 詳細ログ出力
     volumes:
-      - 'moodle_data:/bitnami/moodle'
-      - 'moodledata_data:/bitnami/moodledata'
+      - 'mcj_dev_moodle_data:/bitnami/moodle'
+      - 'mcj_dev_moodledata_data:/bitnami/moodledata'
     depends_on:
       db:
         condition: service_healthy
         restart: true
     networks:
       - jupyterhub-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/login/index.php"]
+      start_period: 10s
+      interval: 20s
+      timeout: 5s
+      retries: 10
     restart: always
+  proxy:
+    image: nginx
+    ports:
+      - 443:443
+    volumes:
+      - ./nginx/templates/${NGINX_CONF_TEMPLATE:-default}:/etc/nginx/templates:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - jupyterhub-network
+    environment:
+      JUPYTERHUB_FQDN: ${JUPYTERHUB_FQDN:-localhost}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.role == manager
+    depends_on:
+      jupyterhub:
+        condition: service_healthy
+      moodle:
+        condition: service_healthy
 volumes:
   db_data:
     driver: local
-  moodle_data:
+  mcj_dev_moodle_data:
     driver: local
-  moodledata_data:
+  mcj_dev_moodledata_data:
     driver: local
   jupyterhub_share:
     driver: local
