@@ -32,6 +32,9 @@ services:
       - http://localhost/
       - http://selenium-executer:4444/wd/hub
       - -i 0
+      - --headless
+      - --output_result
+      - -nmcjtest
     depends_on:
       selenium-executer:
         condition: service_healthy
