@@ -8,23 +8,34 @@ Usage:
 Defaults:
     root = repository root (script location's parent)
     out = docs
-    config = mkdocs.yml
+    config = zensical.toml
     exist_ok = False (error if output file already exists)
     static_docs_dir = docs (optional directory containing additional static markdown files to include in the docs)
-    update_config = False (whether to update the mkdocs config file with the generated nav)
+    update_config = False (whether to update the zensical config file with the generated nav)
 
 The script excludes certain directories (e.g. .git, node_modules, .venv, docs)
 by default. Adjust `EXCLUDE_DIRS` as needed.
 """
 from __future__ import annotations
 import argparse
+import os
 from pathlib import Path
 import shutil
-import yaml
+
+import tomli_w
 
 
 EXCLUDE_DIRS = {".git", "docs", "node_modules", ".venv", "venv",
                 "images", "notebooks", "build", "dist", "mcj-data"}
+BASE_CONFIG = {'project': {'site_name': 'MCJ-CloudHub',
+                           'docs_dir': 'docmerged',
+                           'language': 'ja',
+                           'repo_url': 'https//github.com/nii-gakunin-cloud/mcj-cloudhub',
+                           'theme': {'features': ["navigation.top",
+                                                  "navigation.path"]
+                                     }
+                           }
+               }
 
 
 def get_title_from_md(md: Path) -> str:
@@ -89,17 +100,23 @@ def collect_readmes(root: Path, out: Path, nav: dict, exist_ok: bool) -> dict:
         nav.append({fname: f"{fname}.md"})
         copied += 1
     print(f"Copied {copied} README files into {out}")
+
+    # Root README.md is required to be index page, so the file name must be README.md or index.md
+    # So update here
+    # Ref: https://www.mkdocs.org/user-guide/writing-your-docs/#index-pages
+    shutil.copy2(os.path.join(root, 'README.md'), out.joinpath('README.md'))
+
     return nav
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--root", default=str(Path(__file__).resolve().parents[1]), help="repository root to scan")
-    p.add_argument("--out", default="docs", help="output docs directory")
-    p.add_argument("--config", default="mkdocs.yml", help="mkdocks config file")
+    p.add_argument("--out", default="docmerged", help="output docs directory")
+    p.add_argument("--config", default="zensical.toml", help="mkdocks config file")
     p.add_argument("--exist_ok", default=False, action="store_true", help="error if output file exists")
     p.add_argument("--static_docs_dir", nargs="?", default="docs", help="optional directory containing additional static markdown files to include in the docs")
-    p.add_argument("--update_config", nargs="?", default=False, help="whether to update the mkdocs config file with the generated nav (default: False)")
+    p.add_argument("--update_config", default=False, action="store_true", help="whether to update the zensical config file with the generated nav (default: False)")
     args = p.parse_args()
 
     root = Path(args.root).resolve()
@@ -113,8 +130,7 @@ def main():
         raise SystemExit(f"root not found: {root}")
 
     if update_config is True:
-        with open(config, "rb") as f:
-            yaml_config = yaml.safe_load(f)
+        data = BASE_CONFIG
 
     # clear and recreate out dir
     if out.exists():
@@ -125,11 +141,11 @@ def main():
     collect_readmes(root, out, nav, exist_ok)
 
     merge_static_docs(out, nav, root.joinpath(static_docs_dir))
-    # write nav to mkdocs config file
+    # write nav to zensical config file
     if update_config is True:
-        yaml_config["nav"] = nav
+        data["project"]["nav"] = nav
         with open(config, 'wb') as f:
-            yaml.dump(yaml_config, f, encoding='utf-8', allow_unicode=True)
+            tomli_w.dump(data, f)
 
 
 if __name__ == "__main__":
