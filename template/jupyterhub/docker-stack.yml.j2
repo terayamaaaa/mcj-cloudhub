@@ -97,7 +97,7 @@ services:
       - 443:443
     volumes:
       - ./nginx/templates/default:/etc/nginx/templates:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
+      - {{certs_dir}}:/etc/nginx/certs:ro
     networks:
       - {{swarm_network}}
     environment:
