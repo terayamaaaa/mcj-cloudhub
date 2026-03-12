@@ -127,7 +127,7 @@ RUN jupyter labextension enable lc_wrapper && \
     jupyter wrapper-kernelspec install /tmp/wrapper-kernels/python3 --sys-prefix
 
 # Libaries for log analysis
-RUN pip install matplotlib, pandas, plotly, anywidget
+RUN pip install matplotlib pandas plotly anywidget
 
 HEALTHCHECK NONE
 
