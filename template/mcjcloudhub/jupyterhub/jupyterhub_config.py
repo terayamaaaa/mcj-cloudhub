@@ -9,13 +9,10 @@ import requests
 import yaml
 
 from ldap3 import MODIFY_REPLACE
-
 from lti import confirm_key_exist, get_lms_lti_token, get_course_students_by_moodle_api
 from utils import (ldapClient, replace_url, confirm_dir,
                    get_random_password, set_permission_recursive)
 
-LOG_FORMAT = '[%(levelname)s %(asctime)s %(module)s %(funcName)s:%(lineno)d] %(message)s'
-CONTEXTLEVEL_COURSE = 50
 IMS_LTI13_FQDN = 'purl.imsglobal.org'
 IMS_LTI_CLAIM_BASE = f'https://{IMS_LTI13_FQDN}/spec/lti/claim'
 IMS_LTI13_KEY_MEMBERSHIP = f'http://{IMS_LTI13_FQDN}/vocab/lis/v2/membership'
@@ -39,7 +36,7 @@ DEFAULT_COOKIE_MAX_AGE_DAYS = 0.25
 logger = logging.getLogger()
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.DEBUG)
-log_formatter = logging.Formatter(LOG_FORMAT)
+log_formatter = logging.Formatter('[%(levelname)s %(asctime)s %(module)s %(funcName)s:%(lineno)d] %(message)s')
 handler.setFormatter(log_formatter)
 logger.addHandler(handler)
 logger.setLevel(logging.DEBUG)
@@ -52,28 +49,64 @@ except Exception:
     # なければベースを使う
     get_course_students_custom = None
 
-jupyterhub_fqdn = os.environ['JUPYTERHUB_FQDN']
+
+def getenv_required(key: str) -> str:
+    """Get required environment variable or raise a clear error."""
+    val = os.getenv(key)
+    if val is None:
+        logger.error('Missing required environment variable: %s', key)
+        raise KeyError(f'Missing required environment variable: {key}')
+    return val
+
+
+def getenv_optional(key: str, default=None, cast=None):
+    """Get optional env var with default and optional casting."""
+    val = os.getenv(key, default)
+    if val is None:
+        return None
+    if cast is not None:
+        try:
+            return cast(val)
+        except Exception:
+            logger.warning('Failed to cast env var %s value %r', key, val)
+            return val
+    return val
+
+
+jupyterhub_fqdn = getenv_required('JUPYTERHUB_FQDN')
 jupyterhub_admin_users = os.getenv('JUPYTERHUB_ADMIN_USERS')
 gid_teachers = int(os.getenv('TEACHER_GID', 600))
 gid_students = int(os.getenv('STUDENT_GID', 601))
 
-ldap_password = os.environ['LDAP_ADMIN_PASSWORD']
+ldap_password = getenv_required('LDAP_ADMIN_PASSWORD')
 ldap_server = os.getenv('LDAP_SERVER', 'ldap:1389')
 ldap_base = 'dc=jupyterhub,dc=server,dc=sample,dc=jp'
 ldap_base_dn = f'ou=People,{ldap_base}'
-ldap_manager_dn = f'cn={os.getenv("LDAP_ADMIN_USERNAME", "Manager")},{ldap_base}'
+ldap_admin_username = os.getenv('LDAP_ADMIN_USERNAME', 'Manager')
+ldap_manager_dn = f'cn={ldap_admin_username},{ldap_base}'
 
-# TODO: mariadb側で決まるので以下の指定は必須
-database_dbhost = os.environ['DB_HOST']
-database_dbname = os.environ['DB_NAME']
-database_username = os.environ['DB_USER']
-database_password = os.environ['DB_PASSWORD']
+database_dbhost = getenv_required('DB_HOST')
+database_dbname = getenv_required('DB_NAME')
+database_username = getenv_required('DB_USER')
+database_password = getenv_required('DB_PASSWORD')
 
+# LMS / LTI related envs (optional or required where used)
+lms_client_id = os.getenv('LMS_CLIENT_ID')
+lms_platform_id = os.getenv('LMS_PLATFORM_ID')
+
+# additional LMS / LTI and runtime envs
 get_course_member_method = os.getenv('LTI_METHOD')
 lms_api_token = os.getenv('LMS_API_TOKEN')
+lti_username_key = os.getenv('LTI_USERNAME_KEY', 'email')
 
-# Path configurations host: <jupyterhub container> | <singleuser container>
-# Paths on host(Must be known to jupyterhub for singleuser container mount settings)
+# spawner / image / network
+notebook_image = getenv_required('NOTEBOOK_IMAGE')
+spawner_class_var = os.getenv('JUPYTERHUB_SPAWNER_CLASS', 'dockerspawner.DockerSpawner')
+default_url_var = os.getenv('DEFAULT_URL', '/lab')
+docker_network_name = os.getenv('DOCKER_NETWORK_NAME')
+nb_node_role = os.getenv('NB_NODE_ROLE', 'manager')
+
+# Paths on host
 JUPYTERHUB_DIR_HOST = os.getenv('JUPYTERHUB_DIR_HOST',
                                 os.path.join('/srv', 'jupyterhub', 'jupyterhub', 'jupyterhub'))
 MCJ_DATA_HOST = os.getenv('MCJ_DATA_HOST',
@@ -100,7 +133,6 @@ SHARE_DIR_ROOT_SINGLEUSER = os.path.join('/jupytershare')
 LMS_URL = os.getenv('LMS_URL')
 LMS_SUBDIR = os.getenv('LMS_SUBDIR')
 
-skelton_directory = os.path.join('/etc', 'jupyterhub', 'directories', 'skelton')
 email_domain = os.getenv('EMAIL_DOMAIN', 'example.com')
 
 try:
@@ -231,7 +263,7 @@ c.Authenticator.manage_roles = True
 
 # -- configurations for lti1.3 --
 # Define issuer identifier of the LMS platform
-c.LTI13Authenticator.issuer = os.getenv('LMS_PLATFORM_ID')
+c.LTI13Authenticator.issuer = lms_platform_id
 # Add the LTI 1.3 configuration options
 c.LTI13Authenticator.authorize_url = f'{c.LTI13Authenticator.issuer}/mod/lti/auth.php'
 # The platform's JWKS endpoint url providing public key sets used to verify the ID token
@@ -257,9 +289,9 @@ c.JupyterHub.services.append(
             '--lms-token-endpoint',
             token_endpoint,
             '--lms-client-id',
-            os.getenv('LMS_CLIENT_ID'),
+            lms_client_id,
             '--lms-platform-id',
-            os.getenv('LMS_PLATFORM_ID'),
+            lms_platform_id,
             '--port',
             str(service_teachertools_port),
             '--homedir',
@@ -271,7 +303,7 @@ c.JupyterHub.services.append(
             '--cookie-secret-file',
             c.JupyterHub.cookie_secret_file,
         ],
-        'environment': {'LDAP_PASSWORD': os.environ['LDAP_ADMIN_PASSWORD'],
+        'environment': {'LDAP_PASSWORD': ldap_password,
                         'LDAP_SERVER': ldap_server,
                         'LDAP_MANAGER_DN': ldap_manager_dn,
                         **os.environ}
@@ -299,37 +331,37 @@ c.Spawner.server_token_scopes = [
 ]
 
 # The external tool's client id as represented within the platform (LMS)
-c.LTI13Authenticator.client_id = os.getenv('LMS_CLIENT_ID')
+# use centralized LMS client id
+c.LTI13Authenticator.client_id = lms_client_id
 # default 'email'
-c.LTI13Authenticator.username_key = os.getenv('LTI_USERNAME_KEY', 'email')
+c.LTI13Authenticator.username_key = lti_username_key
 
 # Which spawner to use.
-c.JupyterHub.spawner_class = os.getenv('JUPYTERHUB_SPAWNER_CLASS',
-                                       'dockerspawner.DockerSpawner')
+c.JupyterHub.spawner_class = spawner_class_var
 
 # -- configurations for Spawner --
 c.Spawner.http_timeout = 300
-c.Spawner.default_url = os.getenv('DEFAULT_URL', "/lab")
+c.Spawner.default_url = default_url_var
 c.Spawner.args.append('--allow-root')
 
 # Allowed Images of Notebook
-#c.DockerSpawner.allowed_images = [os.environ['NOTEBOOK_IMAGE']]
-c.DockerSpawner.allowed_images = [os.environ['NOTEBOOK_IMAGE']]
+# use centralized notebook image
+c.DockerSpawner.allowed_images = [notebook_image]
 # Home directory in container
 c.DockerSpawner.notebook_dir = '~'
 
 # Image of Notebook
-#c.SwarmSpawner.image = os.environ['NOTEBOOK_IMAGE']
-c.DockerSpawner.image = os.environ['NOTEBOOK_IMAGE']
+#c.SwarmSpawner.image = notebook_image
+c.DockerSpawner.image = notebook_image
 
 # this is the network name for jupyterhub in docker-compose.yml
 # with a leading 'swarm_' that docker-compose adds
-c.DockerSpawner.network_name = os.getenv('DOCKER_NETWORK_NAME')
+c.DockerSpawner.network_name = docker_network_name
 c.DockerSpawner.extra_host_config = {
-    'network_mode': os.getenv('DOCKER_NETWORK_NAME')}
+    'network_mode': docker_network_name}
 if c.JupyterHub.spawner_class == 'dockerspawner.SwarmSpawner':
     c.SwarmSpawner.extra_placement_spec = {
-        'constraints': [f'node.role == {os.getenv("NB_NODE_ROLE", "manager")}']}
+        'constraints': [f'node.role == {nb_node_role}']}
 
 # For debug
 # c.SwarmSpawner.debug = True
@@ -503,7 +535,7 @@ def get_nrps_token():
                              jupyterhub_fqdn,
                              private_key,
                              token_endpoint,
-                             os.environ['LMS_CLIENT_ID'])
+                             lms_client_id)
 
 
 def get_course_students_by_nrps(url, default_key='user_id'):
@@ -666,9 +698,6 @@ def confirm_dirs(course_name,
 
 def auth_state_hook(spawner, auth_state):
 
-    if not auth_state:
-        return
-
     lms_username = auth_state[IMS_LTI13_KEY_MEMBER_EXT]['user_username']
     lms_course_shortname = auth_state[IMS_LTI13_KEY_MEMBER_CONTEXT]['label']
     lms_role = McjRoles.get_user_role(auth_state[IMS_LTI13_KEY_MEMBER_ROLES])
@@ -701,19 +730,12 @@ def auth_state_hook(spawner, auth_state):
         ldapconn.update_user(lms_username,
                              {'gidNumber': [(MODIFY_REPLACE, [gid_num])]})
 
-    confirm_share_dir(
-        lms_role,
-        lms_username,
-        uid_num,
-        lms_course_shortname,
-    )
-
     students = list()
     if get_course_member_method == 'moodle_api':
         students = get_course_students_by_moodle_api(
+            f'{c.LTI13Authenticator.issuer}/webservice/rest/server.php',
             lms_api_token,
-            auth_state[IMS_LTI13_KEY_MEMBER_CONTEXT]['id'],
-            c.LTI13Authenticator.issuer)
+            auth_state[IMS_LTI13_KEY_MEMBER_CONTEXT]['id'])
     elif get_course_students_custom is not None:
         students = get_course_students_custom(
             auth_state,
@@ -726,10 +748,18 @@ def auth_state_hook(spawner, auth_state):
         students = get_course_students_by_nrps(
             context_memberships_url,
             default_key=c.LTI13Authenticator.username_key)
+
     confirm_dirs(
         lms_course_shortname, lms_role, lms_username,
         uid_num, gid_num,
         students)
+
+    confirm_share_dir(
+        lms_role,
+        lms_username,
+        uid_num,
+        lms_course_shortname,
+    )
 
     spawner.environment = {
         'MOODLECOURSE': lms_course_shortname,
@@ -748,7 +778,7 @@ def auth_state_hook(spawner, auth_state):
         'NB_GID': gid_num,
         'HOME': homedir_singleuser,
         'CHOWN_HOME': 'yes',
-        'CHOWN_EXTRA': f'{homedir_singleuser}',
+        'CHOWN_EXTRA': homedir_singleuser,
         'CHOWN_EXTRA_OPTS': '-R',
     }
     for key, value in lti_custom_params.items():
@@ -760,8 +790,6 @@ def auth_state_hook(spawner, auth_state):
     if os.getenv('ENABLE_CUSTOM_SETUP'):
         spawner.environment['ENABLE_CUSTOM_SETUP'] = 'yes'
 
-    # spawner.extra_container_spec.update({"user": "root",
-    #                                      "workdir": homedir_singleuser})
     spawner.cpu_limit = role_config[lms_role]['cpu_limit']
     spawner.mem_limit = role_config[lms_role]['mem_limit']
     spawner.cpu_guarantee = role_config[lms_role]['cpu_guarantee']
