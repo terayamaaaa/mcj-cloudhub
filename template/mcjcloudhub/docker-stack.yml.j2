@@ -32,8 +32,8 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - {{share_directory_root | default('${PWD}')}}/mcj-data:/jupyterdata # Must be created in advance
-      - ./mcj-data/conf.d:/etc/jupyterhub/conf.d # User conf
-      - ./jupyterhub/jupyterhub_config.py:/etc/jupyterhub/jupyterhub_config.py:ro # For develop
+      - {{jupyterhub_dir}}/mcj-data/conf.d:/etc/jupyterhub/conf.d # User conf
+      - {{jupyterhub_dir}}/jupyterhub_config.py:/etc/jupyterhub/jupyterhub_config.py:ro # For develop
       # - ./test/custom.py:/etc/jupyterhub/custom.py:ro # For test
       # - ./test/conf.d:/etc/jupyterhub/conf.d:ro # For test
     networks:

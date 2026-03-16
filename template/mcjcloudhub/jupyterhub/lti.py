@@ -129,9 +129,8 @@ def get_lms_lti_token(scopes: str | list, tool_url,
     return response.json()['access_token']
 
 
-def get_course_students_by_moodle_api(token, courseid, iss):
+def get_course_students_by_moodle_api(url: str, token: str, courseid: str):
 
-    url = f'{iss}/webservice/rest/server.php'
     params = {
         'wstoken': token,
         'wsfunction': 'core_enrol_get_enrolled_users',
