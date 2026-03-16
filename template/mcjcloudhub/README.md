@@ -8,6 +8,13 @@
 
 環境構築のために必要なものは以下の通りです。  
 
+- Jupyterhub用のマシン
+    - managerノード用（必須）
+        - 外部からアクセス可能であること
+        - httpsでの通信にのみ対応しているため、ドメインの取得が必須
+    - workerノード用（0以上）
+        - 各ユーザ用のコンテナが起動するノード
+        - 検証用途などの場合、managerノードで兼ねることも可能
 - Moodleが利用可能であること  
     - [MCJ-CloudHub](https://github.com/nii-gakunin-cloud/mcj-cloudhub)はMoodleのLTI1.3認証の利用を前提としています
     - [MCJ-CloudHub](https://github.com/nii-gakunin-cloud/mcj-cloudhub)用の外部ツールの作成が必要です
