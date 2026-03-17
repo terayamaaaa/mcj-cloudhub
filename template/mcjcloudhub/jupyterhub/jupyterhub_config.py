@@ -132,6 +132,7 @@ SHARE_DIR_ROOT_SINGLEUSER = os.path.join('/jupytershare')
 # 指定が無い場合、LTI認証で得られたURLを利用する
 LMS_URL = os.getenv('LMS_URL')
 LMS_SUBDIR = os.getenv('LMS_SUBDIR')
+ENABLE_CUSTOM_SETUP_BOOL = str(os.getenv('ENABLE_CUSTOM_SETUP', 'no')).lower() in ('true', 'yes', '1')
 
 email_domain = os.getenv('EMAIL_DOMAIN', 'example.com')
 
@@ -471,26 +472,35 @@ def get_user_mounts(course_name: str, role: str) -> dict:
         'bind': os.path.join(SHARE_DIR_ROOT_SINGLEUSER, 'nbgrader', 'exchange', course_name),
         'mode': 'rw',
     }
-    local_lib_dir = os.path.join(SHARE_DIR_ROOT_HOST, course_name,
-                                 'opt', 'local')
-    if role == McjRoles.INSTRUCTOR.value:
-        mounts[os.path.join(local_lib_dir, 'sbin')] = {
-            'bind': os.path.join('/opt', 'local', 'sbin'),
-            'mode': 'rw',
-        }
-        mounts[os.path.join(local_lib_dir, 'bin')] = {
-            'bind': os.path.join('/opt', 'local', 'bin'),
-            'mode': 'rw',
-        }
-    else:
-        mounts[os.path.join(local_lib_dir, 'sbin')] = {
-            'bind': os.path.join('/opt', 'local', 'sbin'),
-            'mode': 'ro',
-        }
-        mounts[os.path.join(local_lib_dir, 'bin')] = {
-            'bind': os.path.join('/opt', 'local', 'bin'),
-            'mode': 'ro',
-        }
+
+    if ENABLE_CUSTOM_SETUP_BOOL is True:
+        local_lib_dir = os.path.join(SHARE_DIR_ROOT_HOST, course_name,
+                                     'opt', 'local')
+        local_bin = os.path.join(local_lib_dir, 'bin')
+        local_sbin = os.path.join(local_lib_dir, 'sbin')
+
+        local_lib_dir_container = os.path.join('/opt', 'local')
+        local_bin_container = os.path.join(local_lib_dir_container, 'bin')
+        local_sbin_container = os.path.join(local_lib_dir_container, 'sbin')
+
+        if role == McjRoles.INSTRUCTOR.value:
+            mounts[local_sbin] = {
+                'bind': local_sbin_container,
+                'mode': 'rw',
+            }
+            mounts[local_bin] = {
+                'bind': local_bin_container,
+                'mode': 'rw',
+            }
+        else:
+            mounts[local_sbin] = {
+                'bind': local_sbin_container,
+                'mode': 'ro',
+            }
+            mounts[local_bin] = {
+                'bind': local_bin_container,
+                'mode': 'ro',
+            }
     return mounts
 
 
@@ -787,8 +797,7 @@ def auth_state_hook(spawner, auth_state):
     spawner.image = lti_custom_params.get(lti_custom_container_image_name,
                                           os.environ['NOTEBOOK_IMAGE'])
 
-    if os.getenv('ENABLE_CUSTOM_SETUP'):
-        spawner.environment['ENABLE_CUSTOM_SETUP'] = 'yes'
+    spawner.environment['ENABLE_CUSTOM_SETUP'] = os.getenv('ENABLE_CUSTOM_SETUP', 'no')
 
     spawner.cpu_limit = role_config[lms_role]['cpu_limit']
     spawner.mem_limit = role_config[lms_role]['mem_limit']
