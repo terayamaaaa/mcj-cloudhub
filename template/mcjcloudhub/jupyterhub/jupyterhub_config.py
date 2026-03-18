@@ -457,11 +457,11 @@ class FailedAuthStateHookException(McjException):
         )
 
 
-def get_user_mounts(course_name: str, role: str) -> dict:
+def get_user_mounts(course_name: str, role: str, username: str) -> dict:
 
     mounts = dict()
-    mounts[os.path.join(HOME_DIR_ROOT_HOST, '{username}')] = {
-        'bind': os.path.join(HOME_DIR_ROOT_SINGLEUSER, '{username}'),
+    mounts[os.path.join(HOME_DIR_ROOT_HOST, username)] = {
+        'bind': os.path.join(HOME_DIR_ROOT_SINGLEUSER, username),
         'mode': 'rw',
     }
     mounts[os.path.join(SHARE_DIR_ROOT_HOST, 'class', course_name)] = {
@@ -806,7 +806,7 @@ def auth_state_hook(spawner, auth_state):
     spawner.user.name = lms_username
     spawner.user_id = uid_num
     spawner.group_id = gid_num
-    spawner.volumes = get_user_mounts(lms_course_shortname, lms_role)
+    spawner.volumes = get_user_mounts(lms_course_shortname, lms_role, spawner.user.name)
 
 
 def post_auth_hook(lti_authenticator, handler, authentication):
