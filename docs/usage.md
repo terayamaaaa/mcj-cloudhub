@@ -1,22 +1,20 @@
 # 利用の流れ
 
-## **LMSから、LTI認証を利用してJupyterHubへログイン**  
+## LMSからJupyterHubへログイン  
 
 MCJ-CloudHubは、LMSのLTI認証利用が前提となっています。  
+現在は Moodle 4.0 以降に対応しています。  
 
-- 現在対応済みのLMS:
-    - Moodle 4.0以降
-
-## **ログインしたユーザ用の[Jupyter Notebook](https://github.com/jupyter/notebook)環境がDockerコンテナで起動する**  
+## ユーザ用のJupyter Notebook環境が起動する  
 
 LMSで選択したコースにフォーカスした設定で環境が起動します。  
 [DockerSpawner](https://jupyterhub-dockerspawner.readthedocs.io/en/latest/spawner-types.html#dockerspawner)もしくは[SwarmSpawner](https://jupyterhub-dockerspawner.readthedocs.io/en/latest/spawner-types.html#swarmspawner)を利用して、認証されたユーザ用の環境がDockerコンテナで起動します。  
 nbgraderを利用する際に、受講するコースを選択する箇所がありますが、ここにはログイン時に選択していたコースのみが表示されます。  
 
-## **[nbgrader](https://github.com/jupyter/nbgrader)を利用して課題ファイルのやり取り・採点を行う**  
+## nbgraderで課題ファイルのやり取りと採点を行う  
 
 詳細は、[nbgrader公式](https://nbgrader.readthedocs.io/en/stable/)をご覧ください。  
-MCJ-Cloudhubでの差分を以下に記載します。  
+MCJ-CloudHubでの差分を以下に記載します。  
 
 ### nbgrader機能差分
 
