@@ -46,13 +46,16 @@ MCJ-CloudHub uses **LTI 1.3** for user authentication with supported LMS platfor
 
   - **Verified LMS Platforms and Recommended Versions**:
     
-      - **Moodle** (version 4.x.x recommended due to simpler setup)
-        
-          - 3.9.9
-        
-          - 4.0.6 (recommended)
-        
-          - 4.2.7 (recommended)
+      - **Moodle**
+
+          - 4.0.6
+
+          - 4.2.7
+
+          - 4.5
+
+        Version 4 or later is recommended because the platform assumes the use of NRPS (Names and Role Provisioning Services) to retrieve user information.
+        Earlier Moodle versions may require Moodle web services instead.
 
 **System Architecture**
 

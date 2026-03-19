@@ -67,6 +67,10 @@ def merge_static_docs(out: Path, nav: dict, static_docs_dir: Path = None) -> Non
         target_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(md, target_file)
         nav.append({get_title_from_md(md): str(rel)})
+    images_dir = static_docs_dir.joinpath("images")
+    if images_dir.exists() and images_dir.is_dir():
+        target_images_dir = out.joinpath("images")
+        shutil.copytree(images_dir, target_images_dir, dirs_exist_ok=True)
     print(f"Copied static docs from {static_docs_dir} into {out}")
 
 
