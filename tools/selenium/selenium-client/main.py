@@ -802,7 +802,7 @@ if __name__ == "__main__":
     parser.add_argument('-b', '--browser', type=str, default="chrome",
                         help='browser to use (default: chrome)')
     parser.add_argument('--headless', action='store_true',
-                        help='exec in headless mode when True specified (default: False)')
+                        help='exec in headless mode if specified')
     parser.add_argument('-i', '--tool_id', type=int, default=None,
                         help='tool id in lms for login to Jupyterhub with LTI')
     parser.add_argument('-c', '--course_name', type=str, default=None,
@@ -814,9 +814,9 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--notebook_name', type=str, default=None,
                         help="filename to open notebook for execute script which specified by --src option")
     parser.add_argument('--output_result', action='store_true',
-                        help="whether output result file (default: False)")
+                        help="output result file if specified")
     parser.add_argument('--nologout', action='store_true',
-                        help="not to logout after test (default: False)")
+                        help="not to logout after test if specified")
 
     args = parser.parse_args()
     users = _get_user_list(args.accounts_file)
@@ -827,8 +827,8 @@ if __name__ == "__main__":
     course_name = args.course_name
     tool_name = args.tool_name
 
-    if tool_id is None and (course_name is None and tool_name is None):
-        raise ValueError('course_name and tool_name is required if tool_id is not specified.')
+    if tool_id is None and (course_name is None or tool_name is None):
+        raise ValueError('course_name and tool_name are required if tool_id is not specified.')
 
     exec_src = None
     if args.src is not None and os.path.isfile(args.src):
