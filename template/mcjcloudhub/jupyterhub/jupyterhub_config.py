@@ -615,10 +615,6 @@ def confirm_dirs(course_name,
 
     if role == McjRoles.INSTRUCTOR.value:
 
-        # images: 存在しなければ作成
-        images_dir = os.path.join(user_home, 'images')
-        shutil.copytree(os.path.join(home_dir_base, 'images'),
-                        images_dir, dirs_exist_ok=True)
         # README.md: 存在しなければ作成
         shutil.copy(os.path.join(home_dir_base, 'README.md'),
                     user_home)
