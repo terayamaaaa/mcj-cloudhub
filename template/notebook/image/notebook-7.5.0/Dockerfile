@@ -1,4 +1,4 @@
-FROM quay.io/jupyter/base-notebook:notebook-7.5.0
+FROM quay.io/jupyter/scipy-notebook:notebook-7.5.0
 
 LABEL Description="Single-user notebook server container image for MCJ-CloudHub"
 
