@@ -9,17 +9,24 @@ import string
 import sys
 import requests
 import yaml
+
 from ldap3 import MODIFY_REPLACE
 
-from lms_web_service import get_course_students_by_lms_api
 from lti import confirm_key_exist, get_lms_lti_token
 from utils import ldapClient
+try:
+    from lms_web_service import get_course_students_by_lms_api
+except Exception as _e:
+    logging.getLogger(__name__).debug(
+        'Optional import lms_web_service failed: %s', _e)
+    get_course_students_by_lms_api = None
 
 LOG_FORMAT = '[%(levelname)s %(asctime)s %(module)s %(funcName)s:%(lineno)d] %(message)s'
 CONTEXTLEVEL_COURSE = 50
 IMS_LTI13_FQDN = 'purl.imsglobal.org'
 IMS_LTI_CLAIM_BASE = f'https://{IMS_LTI13_FQDN}/spec/lti/claim'
 IMS_LTI13_KEY_MEMBERSHIP = f'http://{IMS_LTI13_FQDN}/vocab/lis/v2/membership'
+IMS_LTI13_KEY_CUSTOM_PARAMS = f'{IMS_LTI_CLAIM_BASE}/custom'
 IMS_LTI13_KEY_MEMBER_ROLES = f'{IMS_LTI_CLAIM_BASE}/roles'
 IMS_LTI13_KEY_MEMBER_EXT = f'{IMS_LTI_CLAIM_BASE}/ext'
 IMS_LTI13_KEY_MEMBER_CONTEXT = f'{IMS_LTI_CLAIM_BASE}/context'
@@ -27,13 +34,18 @@ IMS_LTI13_NRPS_TOKEN_SCOPE = f'https://{IMS_LTI13_FQDN}/spec/lti-nrps/scope/cont
 IMS_LTI13_NRPS_ASSERT_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
 IMS_LTI13_KEY_NRPS = f'https://{IMS_LTI13_FQDN}/spec/lti-nrps/claim/namesroleservice'
 
-DEFUALT_IDLE_TIMEOUT = 1800
-DEFUALT_CULL_EVERY = 60
-DEFUALT_SERVER_MAX_AGE = 0
-DEFUALT_COOKIE_MAX_AGE_DAYS = 0.25
+lti_custom_env_prefix = "env_"
+lti_custom_container_image_name = "container_image_name"
+
+DEFAULT_IDLE_TIMEOUT = 1800
+DEFAULT_CULL_EVERY = 60
+DEFAULT_SERVER_MAX_AGE = 0
+DEFAULT_COOKIE_MAX_AGE_DAYS = 0.25
 
 HOME_DIR_ROOT = '/home'
 SHARE_DIR_ROOT = '/jupytershare'
+JUPYTERHUB_DIR = '/etc/jupyterhub'
+JUPYTERHUB_DIR_HOST = '/srv/jupyterhub/jupyterhub/jupyterhub'
 
 # -- logger setting --
 logger = logging.getLogger()
@@ -52,7 +64,7 @@ gid_students = int(os.getenv('STUDENT_GID', 601))
 ldap_password = os.environ['LDAP_PASSWORD']
 ldap_server = os.getenv('LDAP_SERVER', 'ldap:1389')
 ldap_base_dn = 'ou=People,dc=jupyterhub,dc=server,dc=sample,dc=jp'
-ldap_manager_dn = f'cn={os.getenv("LDAP_ADMIN", "Manager")},'\
+ldap_manager_dn = f'cn={os.getenv("LDAP_ADMIN", "Manager")},' \
                     'dc=jupyterhub,dc=server,dc=sample,dc=jp'
 
 database_dbhost = os.getenv('DB_HOST', 'mariadb')
@@ -65,10 +77,19 @@ lms_api_token = os.getenv('LMS_API_TOKEN')
 
 HOME_DIR_ROOT_HOST = os.environ['HOME_DIR_ROOT']
 SHARE_DIR_ROOT_HOST = os.environ['SHARE_DIR_ROOT']
-skelton_directory = os.path.join(HOME_DIR_ROOT_HOST, 'skelton')
 email_domain = os.getenv('EMAIL_DOMAIN', 'example.com')
 
-with open('/etc/jupyterhub/jupyterhub_params.yaml', 'r', encoding="utf-8") as yml:
+try:
+    root_obj = pwd.getpwnam("root")
+except KeyError as e:
+    logger.error("Could not find root in passwd.")
+    raise e
+
+root_uid_num = int(root_obj[2])
+# root_gid_num = int(root_obj[3])
+
+with open(os.path.join(JUPYTERHUB_DIR, 'jupyterhub_params.yaml'), 'r',
+          encoding="utf-8") as yml:
     config = yaml.safe_load(yml)
 
 c = get_config() # type: ignore # noqa
@@ -76,22 +97,26 @@ c = get_config() # type: ignore # noqa
 c.Authenticator.allow_all = True
 c.Authenticator.manage_roles = True
 
+# Enable subdomains and allow iframe for nbgrader
+# Ref: https://nbgrader.readthedocs.io/en/stable/configuration/jupyterhub_config.html#enabling-jupyterhub-subdomains
+c.JupyterHub.enable_subdomains = True
+
 # cookie max-age (days) is 6 hours
 c.JupyterHub.cookie_max_age_days = config.get(
-    'cookie_max_age_days', DEFUALT_COOKIE_MAX_AGE_DAYS)
+    'cookie_max_age_days', DEFAULT_COOKIE_MAX_AGE_DAYS)
 c.JupyterHub.cookie_secret_file = '/srv/jupyterhub/jupyterhub_cookie_secret'
 
 if config.get('cull_server') is not None:
     cull_server_idle_timeout = config['cull_server'].get(
-        'cull_server_idle_timeout', DEFUALT_IDLE_TIMEOUT)
+        'cull_server_idle_timeout', DEFAULT_IDLE_TIMEOUT)
     cull_server_every = config['cull_server'].get(
-        'cull_server_every', DEFUALT_CULL_EVERY)
+        'cull_server_every', DEFAULT_CULL_EVERY)
     cull_server_max_age = config['cull_server'].get(
-        'cull_server_max_age', DEFUALT_SERVER_MAX_AGE)
+        'cull_server_max_age', DEFAULT_SERVER_MAX_AGE)
 else:
-    cull_server_idle_timeout = DEFUALT_IDLE_TIMEOUT
-    cull_server_every = DEFUALT_CULL_EVERY
-    cull_server_max_age = DEFUALT_SERVER_MAX_AGE
+    cull_server_idle_timeout = DEFAULT_IDLE_TIMEOUT
+    cull_server_every = DEFAULT_CULL_EVERY
+    cull_server_max_age = DEFAULT_SERVER_MAX_AGE
 c.JupyterHub.load_roles = []
 
 if cull_server_idle_timeout > 0:
@@ -121,6 +146,10 @@ if cull_server_idle_timeout > 0:
     ]
 
 if 'JUPYTERHUB_CRYPT_KEY' not in os.environ:
+    logger.warning(
+        "Need JUPYTERHUB_CRYPT_KEY env for persistent auth_state.\n"
+        "    export JUPYTERHUB_CRYPT_KEY=$(openssl rand -hex 32)"
+    )
     c.CryptKeeper.keys = [os.urandom(32)]
 
 # The proxy is in another container
@@ -138,7 +167,9 @@ c.JupyterHub.init_spawners_timeout = 60
 # Shutdown active kernels (notebooks) when user logged out.
 c.JupyterHub.shutdown_on_logout = True
 # Whether to shutdown single-user servers when the Hub shuts down.
-c.JupyterHub.cleanup_servers = True
+# Set False not to interrupt existing server when restart hub, especially in production.
+c.JupyterHub.cleanup_servers = False
+c.JupyterHub.cleanup_proxy = False
 
 # debug-logging for testing
 c.JupyterHub.log_level = logging.DEBUG
@@ -167,6 +198,7 @@ c.Authenticator.refresh_pre_spawn = True
 c.Authenticator.auth_refresh_age = 300
 c.Authenticator.enable_auth_state = True
 c.Authenticator.manage_groups = True
+c.Authenticator.manage_roles = True
 
 # -- configurations for lti1.3 --
 # Define issuer identifier of the LMS platform
@@ -186,7 +218,9 @@ c.JupyterHub.services.append(
         'url': f'http://0.0.0.0:{service_teachertools_port}',
         'command': [
             sys.executable,
-            "/etc/jupyterhub/service_teachertools/teachertools.py",
+            os.path.join(JUPYTERHUB_DIR,
+                         f"service_{service_teachertools_name}",
+                         "teachertools.py"),
             '--lms-token-endpoint',
             token_endpoint,
             '--lms-client-id',
@@ -212,16 +246,14 @@ c.JupyterHub.load_roles.append(
         "services": [service_teachertools_name],
     }
 )
-# Permission for teachers
-c.JupyterHub.load_roles.append(
-    {
-        "name": "teachers",
-        "scopes": [
-            f"access:services!service={service_teachertools_name}"
-        ],
-        "groups": ["teacher"],
-    }
-)
+
+# Use JUPTYERHUB_API_TOKEN for service teacher tools
+# Ref: https://discourse.jupyter.org/t/add-scopes-to-jupyterhub-api-token-through-helm-chart-values/18543
+c.Spawner.server_token_scopes = [
+    "access:servers!server",
+    "users:activity!user",
+    f"access:services!service={service_teachertools_name}",
+]
 
 # The external tool's client id as represented within the platform (LMS)
 c.LTI13Authenticator.client_id = os.getenv('LMS_CLIENT_ID')
@@ -273,50 +305,29 @@ class McjRoles(Enum):
         return [d.value for d in cls]
 
     @classmethod
-    def get_user_role(cls, lti_roles):
-        """role判定
-
-        Instructor&Learner -> Learner
-        Learner -> Learner
-        Instructor -> Instructor
-        """
-
+    def _parse_roles(cls, lti_roles):
         is_instructor = False
         is_learner = False
         for rolename in lti_roles:
             param_type, role = rolename.split('#')
-            if not param_type == IMS_LTI13_KEY_MEMBERSHIP:
+            if param_type != IMS_LTI13_KEY_MEMBERSHIP:
                 continue
             if role == cls.INSTRUCTOR.value:
                 is_instructor = True
             elif role == cls.LEARNER.value:
                 is_learner = True
+        return is_instructor, is_learner
 
+    @classmethod
+    def get_user_role(cls, lti_roles):
+        is_instructor, is_learner = cls._parse_roles(lti_roles)
         if not is_learner and is_instructor:
             return cls.INSTRUCTOR.value
-        else:
-            return cls.LEARNER.value
+        return cls.LEARNER.value
 
     @classmethod
     def is_instructor(cls, lti_roles):
-        """role判定
-
-        Instructor&Learner -> Learner
-        Learner -> Learner
-        Instructor -> Instructor
-        """
-
-        is_instructor = False
-        is_learner = False
-        for rolename in lti_roles:
-            param_type, role = rolename.split('#')
-            if not param_type == IMS_LTI13_KEY_MEMBERSHIP:
-                continue
-            if role == cls.INSTRUCTOR.value:
-                is_instructor = True
-            elif role == cls.LEARNER.value:
-                is_learner = True
-
+        is_instructor, is_learner = cls._parse_roles(lti_roles)
         return not is_learner and is_instructor
 
 
@@ -368,14 +379,13 @@ class FailedAuthStateHookException(McjException):
         )
 
 
-def confirm_dir(path, mode=0o700, uid=-1, gid=-1):
-
+def confirm_dir(path: str, mode: int = 0o700, uid: int = -1, gid: int = -1) -> None:
     os.makedirs(path, exist_ok=True)
     os.chmod(path, mode=mode)
     os.chown(path, uid, gid)
 
 
-def change_owner(homePath, uid, gid):
+def change_owner(homePath: str, uid: int, gid: int) -> None:
     for root, dirs, files in os.walk(homePath):
         for d in dirs:
             os.chown(os.path.join(root, d), uid, gid)
@@ -384,7 +394,7 @@ def change_owner(homePath, uid, gid):
     os.chown(homePath, uid, gid)
 
 
-def get_random_password(size=12):
+def get_random_password(size: int = 12) -> str:
     alphabet = string.ascii_letters + string.digits
     while True:
         password = ''.join(secrets.choice(alphabet) for i in range(size))
@@ -395,9 +405,8 @@ def get_random_password(size=12):
     return password
 
 
-def set_permission_recursive(path: str, mode = None,
-                             uid: int = -1, gid: int = -1):
-
+def set_permission_recursive(path: str, mode: int | None = None,
+                             uid: int = -1, gid: int = -1) -> None:
     for root, dirs, files in os.walk(path):
         for d in dirs:
             p = os.path.join(root, d)
@@ -412,7 +421,7 @@ def set_permission_recursive(path: str, mode = None,
             os.chown(p, uid, gid)
 
 
-def get_user_mounts(course_name: str, role):
+def get_user_mounts(course_name: str, role: str) -> dict:
 
     mounts = dict()
     mounts[os.path.join(HOME_DIR_ROOT_HOST, '{username}')] = {
@@ -427,32 +436,34 @@ def get_user_mounts(course_name: str, role):
         'bind': os.path.join(SHARE_DIR_ROOT, 'nbgrader', 'exchange', course_name),
         'mode': 'rw',
     }
-    mounts[os.path.join('/exchange', 'sudoers')] = {
+    mounts[os.path.join(JUPYTERHUB_DIR_HOST, 'sudoers')] = {
         'bind': os.path.join('/etc', 'sudoers'),
         'mode': 'ro',
     }
+    local_lib_dir = os.path.join(SHARE_DIR_ROOT_HOST, course_name,
+                                 'opt', 'local')
     if role == McjRoles.INSTRUCTOR.value:
-        mounts[os.path.join(SHARE_DIR_ROOT_HOST, course_name, 'opt', 'local', 'sbin')] = {
+        mounts[os.path.join(local_lib_dir, 'sbin')] = {
             'bind': os.path.join('/opt', 'local', 'sbin'),
             'mode': 'rw',
         }
-        mounts[os.path.join(SHARE_DIR_ROOT_HOST, course_name, 'opt', 'local', 'bin')] = {
+        mounts[os.path.join(local_lib_dir, 'bin')] = {
             'bind': os.path.join('/opt', 'local', 'bin'),
             'mode': 'rw',
         }
     else:
-        mounts[os.path.join(SHARE_DIR_ROOT_HOST, course_name, 'opt', 'local', 'sbin')] = {
+        mounts[os.path.join(local_lib_dir, 'sbin')] = {
             'bind': os.path.join('/opt', 'local', 'sbin'),
             'mode': 'ro',
         }
-        mounts[os.path.join(SHARE_DIR_ROOT_HOST, course_name, 'opt', 'local', 'bin')] = {
+        mounts[os.path.join(local_lib_dir, 'bin')] = {
             'bind': os.path.join('/opt', 'local', 'bin'),
             'mode': 'ro',
         }
     return mounts
 
 
-def confirm_share_dir(role, root_uid_num, user_name,
+def confirm_share_dir(role, user_name,
                       uid_num, course):
 
     course_share_dir_root = os.path.join(SHARE_DIR_ROOT_HOST, 'class')
@@ -460,13 +471,14 @@ def confirm_share_dir(role, root_uid_num, user_name,
     submit_root = os.path.join(course_share_dir_root, course, 'submit')
     submit_dir = os.path.join(course_share_dir_root, course, 'submit',
                               user_name)
-    class_dir = os.path.join(HOME_DIR_ROOT_HOST, user_name, 'class')
 
     confirm_dir(submit_root, mode=0o0755, uid=root_uid_num,
                 gid=gid_teachers)
     confirm_dir(share_path, mode=0o0775, uid=root_uid_num,
                 gid=gid_teachers)
 
+    local_lib_dir = os.path.join(SHARE_DIR_ROOT_HOST, course,
+                                 'opt', 'local')
     if role == McjRoles.INSTRUCTOR.value:
 
         confirm_dir(course_share_dir_root, mode=0o0775, uid=root_uid_num,
@@ -475,10 +487,12 @@ def confirm_share_dir(role, root_uid_num, user_name,
                     gid=gid_teachers)
         confirm_dir(submit_dir, mode=0o0750, uid=uid_num,
                     gid=root_uid_num)
-        confirm_dir(os.path.join(SHARE_DIR_ROOT_HOST, course, 'opt', 'local', 'bin'), mode=0o0755, uid=uid_num,
-                   gid=-1)
-        confirm_dir(os.path.join(SHARE_DIR_ROOT_HOST, course, 'opt', 'local', 'sbin'), mode=0o0755, uid=uid_num,
-                   gid=-1)
+        confirm_dir(os.path.join(local_lib_dir, 'bin'),
+                    mode=0o0755, uid=uid_num,
+                    gid=-1)
+        confirm_dir(os.path.join(local_lib_dir, 'sbin'),
+                    mode=0o0755, uid=uid_num,
+                    gid=-1)
 
     else:
         confirm_dir(submit_dir, mode=0o0750, uid=uid_num,
@@ -534,13 +548,12 @@ def get_course_students_by_nrps(url, default_key='user_id'):
     return students
 
 
-def confirm_nbgrader_dir(course_name,
-                         role,
-                         user_name,
-                         root_uid_num,
-                         user_uid_num,
-                         groupid,
-                         students):
+def confirm_dirs(course_name,
+                 role,
+                 user_name,
+                 user_uid_num,
+                 groupid,
+                 students):
 
     exchange_root_path = os.path.join(SHARE_DIR_ROOT_HOST, 'nbgrader',
                                       'exchange')
@@ -550,15 +563,28 @@ def confirm_nbgrader_dir(course_name,
     exchange_feedback_path = os.path.join(exchange_course_path, 'feedback')
 
     user_home = os.path.join(HOME_DIR_ROOT_HOST, user_name)
-    nbgrader_template_path_base = os.path.join(SHARE_DIR_ROOT_HOST, 'nbgrader',
-                                               'templates')
-    nbgrader_template_path = os.path.join(nbgrader_template_path_base,
-                                          role_config[role]['template_dir_name'])
+    home_dir_base = os.path.join(JUPYTERHUB_DIR,
+                                 'directory_base',
+                                 role_config[role]['template_dir_name'])
 
+    # ホームディレクトリ作成
+    confirm_dir(user_home, mode=0o755, uid=user_uid_num, gid=groupid)
     confirm_dir(exchange_root_path, mode=0o0755, uid=root_uid_num,
                 gid=gid_teachers)
 
     if role == McjRoles.INSTRUCTOR.value:
+
+        images_dir = os.path.join(user_home, 'images')
+        shutil.copytree(os.path.join(home_dir_base, 'images'),
+                        images_dir, dirs_exist_ok=True)
+        shutil.copy(os.path.join(home_dir_base, 'README.md'),
+                    user_home)
+        tools_dir = os.path.join(user_home, 'teacher_tools')
+        if not os.path.isdir(tools_dir):
+            shutil.copytree(os.path.join(home_dir_base, 'teacher_tools'),
+                            tools_dir)
+            set_permission_recursive(tools_dir, uid=user_uid_num)
+
         confirm_dir(exchange_course_path, mode=0o0755, uid=user_uid_num,
                     gid=gid_teachers)
         confirm_dir(exchange_inbound_path, mode=0o0733, uid=user_uid_num,
@@ -569,21 +595,22 @@ def confirm_nbgrader_dir(course_name,
                     gid=gid_students)
 
         instructor_root_path = os.path.join(user_home, 'nbgrader')
-        instructor_log_file = os.path.join(instructor_root_path, 'nbgrader.log')
+        instructor_log_file = os.path.join(instructor_root_path,
+                                           'nbgrader.log')
         course_dir = os.path.join(instructor_root_path, course_name)
         course_autograded_dir = os.path.join(course_dir, 'autograded')
         course_release_dir = os.path.join(course_dir, 'release')
         course_source_dir = os.path.join(course_dir, 'source')
         course_submitted_dir = os.path.join(course_dir, 'submitted')
-        course_config_file = os.path.join(course_dir, 'nbgrader_config.py')
+        course_nbgrader_config = os.path.join(course_dir, 'nbgrader_config.py')
         cource_header_file = os.path.join(course_source_dir, 'header.ipynb')
         cource_autotests_yml = os.path.join(course_dir, 'autotests.yml')
 
-        config_template_file = os.path.join(nbgrader_template_path,
+        config_template_file = os.path.join(home_dir_base,
                                             'nbgrader_config.py')
-        header_template_file = os.path.join(nbgrader_template_path,
+        header_template_file = os.path.join(home_dir_base,
                                             'header.ipynb')
-        autotests_yml = os.path.join(nbgrader_template_path, 'autotests.yml')
+        autotests_yml = os.path.join(home_dir_base, 'autotests.yml')
 
         confirm_dir(instructor_root_path, uid=user_uid_num,
                     gid=gid_teachers, mode=0o0755)
@@ -604,15 +631,17 @@ def confirm_nbgrader_dir(course_name,
         target_lines = target_lines.replace(
             'NBG_STUDENTS = []', f"NBG_STUDENTS = {str(students)}")
 
-        if os.path.exists(course_config_file):
-            os.remove(course_config_file)
+        # ログインするコースに合わせて毎回再作成するもの（システム管理）
+        if os.path.exists(course_nbgrader_config):
+            os.remove(course_nbgrader_config)
 
-        with open(course_config_file, mode="w", encoding="utf-8") as f2:
+        with open(course_nbgrader_config, mode="w", encoding="utf-8") as f2:
             f2.write(target_lines)
 
-        os.chown(course_config_file, user_uid_num, groupid)
-        os.chmod(course_config_file, 0o0644)
+        os.chown(course_nbgrader_config, user_uid_num, groupid)
+        os.chmod(course_nbgrader_config, 0o0644)
 
+        # コース毎ごとのディレクトリ配下にあるものは、存在しない場合にのみ作成
         if not os.path.isfile(cource_header_file):
 
             shutil.copyfile(header_template_file, cource_header_file)
@@ -641,13 +670,14 @@ def auth_state_hook(spawner, auth_state):
     lms_username = auth_state[IMS_LTI13_KEY_MEMBER_EXT]['user_username']
     lms_course_shortname = auth_state[IMS_LTI13_KEY_MEMBER_CONTEXT]['label']
     lms_role = McjRoles.get_user_role(auth_state[IMS_LTI13_KEY_MEMBER_ROLES])
-    homedir_host = os.path.join(HOME_DIR_ROOT_HOST, lms_username)
     homedir_container = os.path.join(HOME_DIR_ROOT, lms_username)
     uid_num = int(auth_state['sub']) + 1000
     gid_num = role_config[lms_role]['gid_num']
 
     ldapconn = ldapClient(ldap_server, ldap_manager_dn, ldap_password)
     search_result = ldapconn.search_user(lms_username, ['uidNumber'])
+
+    lti_custom_params = auth_state[IMS_LTI13_KEY_CUSTOM_PARAMS]
 
     if search_result is None:
         ldapconn.add_user(
@@ -669,36 +699,15 @@ def auth_state_hook(spawner, auth_state):
         ldapconn.update_user(lms_username,
                              {'gidNumber': [(MODIFY_REPLACE, [gid_num])]})
 
-    # ホームディレクトリ作成
-    confirm_dir(homedir_host, mode=0o755, uid=uid_num, gid=gid_num)
-    if lms_role == McjRoles.INSTRUCTOR.value:
-        shutil.copy(os.path.join(skelton_directory, 'README.md'),
-                    homedir_host)
-        tools_dir = os.path.join(homedir_host, 'teacher_tools')
-        if not os.path.isdir(tools_dir):
-            shutil.copytree(os.path.join(skelton_directory, 'teacher_tools'),
-                            tools_dir)
-            set_permission_recursive(tools_dir, uid=uid_num)
-
-    try:
-        root_obj = pwd.getpwnam("root")
-    except KeyError as e:
-        logger.error("Could not find root in passwd.")
-        raise e
-
-    root_uid_num = int(root_obj[2])
-    # root_gid_num = int(root_obj[3])
-
     confirm_share_dir(
         lms_role,
-        root_uid_num,
         lms_username,
         uid_num,
         lms_course_shortname,
     )
 
     students = list()
-    if get_course_member_method == 'moodle_api':
+    if get_course_member_method == 'lms_api' and get_course_students_by_lms_api is not None:
         students = get_course_students_by_lms_api(
             lms_api_token,
             auth_state[IMS_LTI13_KEY_MEMBER_CONTEXT]['id'],
@@ -711,9 +720,9 @@ def auth_state_hook(spawner, auth_state):
         students = get_course_students_by_nrps(
             auth_state[IMS_LTI13_KEY_NRPS]['context_memberships_url'])
 
-    confirm_nbgrader_dir(
+    confirm_dirs(
         lms_course_shortname, lms_role, lms_username,
-        root_uid_num, uid_num, gid_num,
+        uid_num, gid_num,
         students)
 
     spawner.environment = {
@@ -736,6 +745,12 @@ def auth_state_hook(spawner, auth_state):
         'CHOWN_EXTRA': f'{homedir_container}',
         'CHOWN_EXTRA_OPTS': '-R',
     }
+    for key, value in lti_custom_params.items():
+        if lti_custom_env_prefix in key:
+            spawner.environment[key.replace('env_', '')] = value
+    spawner.image = lti_custom_params.get(lti_custom_container_image_name,
+                                          os.environ['NOTEBOOK_IMAGE'])
+
     if os.getenv('ENABLE_CUSTOM_SETUP'):
         spawner.environment['ENABLE_CUSTOM_SETUP'] = 'yes'
 
@@ -770,9 +785,38 @@ def post_auth_hook(lti_authenticator, handler, authentication):
     course_name = updated_auth_state['auth_state'][IMS_LTI13_KEY_MEMBER_CONTEXT]['label']
     updated_auth_state['name'] = lms_user_name
     updated_auth_state['groups'] = [course_name]
+
+    if 'roles' not in updated_auth_state:
+        updated_auth_state['roles'] = list()
+
+    # デフォルトのuserは使えない？
+    updated_auth_state['roles'].append({'name': 'user'})
+
+    role_user_common = {
+        'name': 'self',
+    #    'scopes': ['users!user=self']
+    }
+    updated_auth_state['roles'].append(role_user_common)
+
     is_t = McjRoles.is_instructor(authentication['auth_state'][IMS_LTI13_KEY_MEMBER_ROLES])
     if is_t:
         updated_auth_state['groups'].append('teacher')
+
+        role_course_teacher = {
+            'name': f'instructor-{course_name}',
+            'scopes': [
+                'admin-ui',
+                f'list:users!group={course_name}',
+                f'admin:servers!group={course_name}',
+                f"access:servers!group={course_name}",
+            ]}
+        role_instructor_common = {
+            'name': 'instructor',
+            'scopes': ['access:services',
+                       f"access:services!service={service_teachertools_name}"]
+        }
+        updated_auth_state['roles'].append(role_instructor_common)
+        updated_auth_state['roles'].append(role_course_teacher)
 
     return updated_auth_state
 

@@ -37,6 +37,13 @@ private_key, _ = confirm_key_exist()
 DEFAULT_DT_FROM = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
+def remove_uuid_branch(uuid_string):
+    parts = uuid_string.split('-')
+    if len(parts) > 5:
+        return '-'.join(parts[:5])
+    return uuid_string
+
+
 def jst2datetime(dt: str) -> datetime:
     """JSTのタイムスタンプをdatetime型に変換する
 
@@ -205,6 +212,8 @@ def update_or_create_cell_id(db_url: str, notebook_name: str,
     if len(cell_infos) == 0:
         return
     engine = create_engine(db_url)
+    # ノートブックを複製利用した場合など、uuidに枝番が付く場合があるが、ここでは切り捨てない
+    # ただし、出力されるログディレクトリ名では枝番が付かないので注意する
     data = [CellCreate(id=cell_info['cell_id'],
                        assignment=assignment,
                        section=cell_info['section'],
@@ -277,6 +286,19 @@ def update_or_create_log(db_url: str,  notebook_name: str,
         session.commit()
 
 
+def _load_log_json(log_dir: str, cell_id: str) -> dict:
+    """ログ情報を読み取る
+    """
+    log_json = os.path.join(log_dir, cell_id, cell_id+'.json')
+    if not os.path.isfile(log_json):
+        return {}
+
+    with open(log_json, 'r', encoding='utf8') as f:
+        logs = json.load(f)
+
+    return logs
+
+
 def log2db(course: str, user_name: str,
            homedir: str = '/jupyter',
            dt_from: datetime = DEFAULT_DT_FROM,
@@ -299,18 +321,6 @@ def log2db(course: str, user_name: str,
     :returns: 作成したDBファイルのパス
     :rtype: string
     """
-
-    def _load_log_json(log_dir: str, cell_id: str) -> dict:
-        """ログ情報を読み取る
-        """
-        log_json = os.path.join(log_dir, cell_id, cell_id+'.json')
-        if not os.path.isfile(log_json):
-            return {}
-
-        with open(log_json, 'r', encoding='utf8') as f:
-            logs = json.load(f)
-
-        return logs
 
     dt_to = dt_to if dt_to is not None else datetime.now(timezone.utc)
     original_file_dir = 'release'
@@ -388,10 +398,15 @@ def log2db(course: str, user_name: str,
                     # Notebook不存在
                     continue
                 for cell_info in notebook[notebook_name]['cell_infos']:
+                    # ノートブック上の`lc_cell_meme`に枝番がついていても、
+                    # ログ出力先のディレクトリ名には枝番が付かないため、
+                    # カットしたuuidで検索する
                     logs = _load_log_json(student_local_log_dir,
-                                          cell_info['cell_id'])
+                                          remove_uuid_branch(cell_info['cell_id']))
 
                     if len(logs) > 0:
+                        # DBには枝番付きのセルIDを登録する
+                        # 教師のノートブック上のセルIDと一致させるため。
                         update_or_create_log(log_db_url, notebook_name,
                                              assign_name,
                                              student, cell_info['cell_id'],
@@ -508,7 +523,7 @@ class TeacherToolsApiHandler(HubAuthenticated, web.RequestHandler):
                 self.log.warning(exception.log_message)
                 reason = exception.reason
                 if 403 == status_code and not reason:
-                    reason = 'Token may be invalid'
+                    reason = 'Permission denied'
                 self.finish({
                     "status": status_code,
                     "reason": reason,
@@ -533,7 +548,8 @@ class TeacherToolsLogDBHandler(TeacherToolsApiHandler):
             course = self.json_data['course']
         except KeyError as e:
             raise web.HTTPError(
-                HTTPStatus.BAD_REQUEST, reason=f"Missing required paramater: [{e}]"
+                HTTPStatus.BAD_REQUEST,
+                reason=f"Missing required paramater: [{e}]"
             )
 
         dt_from = self.json_data.get('from')
@@ -548,10 +564,10 @@ class TeacherToolsLogDBHandler(TeacherToolsApiHandler):
             opt['assignment'] = assignment
         try:
             db_path = log2db(course, user["name"], self.homedir, **opt)
-        except FileNotFoundError as e:
+        except FileNotFoundError:
             raise web.HTTPError(
                 HTTPStatus.BAD_REQUEST,
-                f"directory not found: {os.path.join('~', str(e))}"
+                reason=f"Course not found: {course}"
             )
 
         res = dict()
@@ -812,4 +828,3 @@ class TeacherToolsViewHandler(TeacherToolsHandler):
                                  parsed_scopes=user.get('scopes') or [],
                                  )
         )
-
