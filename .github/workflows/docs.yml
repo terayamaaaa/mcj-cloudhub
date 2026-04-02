@@ -7,7 +7,6 @@ on:
 permissions:
   contents: read
   pages: write
-  id-token: write
 jobs:
   deploy:
     environment:
@@ -21,6 +20,7 @@ jobs:
         with:
           python-version: 3.x
       - run: pip install zensical
+      - run: python tools/generate_docs_from_readmes.py
       - run: zensical build --clean 
       - uses: actions/upload-pages-artifact@v4
         with:
